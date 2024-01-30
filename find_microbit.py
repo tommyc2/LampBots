@@ -2,9 +2,11 @@ import serial
 
 try:
     PATH = '/dev/edit_here'
+    baud_rate = 115200
     # Change directory for Linux, macOS etc.
-    with serial.Serial('PATH', 115200, timeout=1) as ser:
-        print("Microbit found and ready for serial communications.")
+    with serial.Serial('PATH', baud_rate, timeout=1) as ser:
+        print("Microbit found at: ", PATH)
+        print("Baud Rate: ", baud_rate)
         # Uncomment here --> exec(open("main.py").read())
 
 except serial.SerialException as e:
