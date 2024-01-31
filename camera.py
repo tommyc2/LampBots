@@ -3,9 +3,11 @@
 import numpy as np
 import cv2
 import serial
+import serial.tools.list_ports as list_ports
 import time
 import random
 import platform
+import sys
 from enum import Enum
 
 class TrackingType(Enum):
@@ -39,6 +41,10 @@ class Hsv:
         self.sat.high = sat_high
         self.val.low = val_low
         self.val.high = val_high
+
+# Print to stderr
+def error(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
 
 # Selects a random point from a predefined list of points until it is not `previous_result`,
 # and returns it.
@@ -128,42 +134,54 @@ def send_data(file, x, y):
         print(f"Data sent: {x},{y}")
 
     except Exception as e:
-        print(f"Error: {e}")
+        error(f"Error: {e}")
 
-def main():
-    tracking_rate = 0.5 # How often to send data to microbit in seconds
-    idle_rate = 3 # How often to send a movement when idling
-    tracking_type = TrackingType.FACE
+def open_serial():
+    # See https://support.microbit.org/support/solutions/articles/19000035697-what-are-the-usb-vid-pid-numbers-for-micro-bit
+    MICROBIT_PID = 0x0204
+    MICROBIT_VID = 0x0d28
+    BAUD_RATE = 115200  # Default baud rate for micro:bit
 
-    os = platform.system()
+    serial_file = None
+    for p in list_ports.comports():
+        if p.vid == MICROBIT_VID and p.pid == MICROBIT_PID:
+            try:
+                serial_file = serial.Serial(p.device, BAUD_RATE, timeout=1)
+            except Exception as e:
+                error(
+                    f"Could not open serial port: {e}",
+                    "Continuing without sending over serial",
+                    sep = '',
+                )
+                break;
 
-    baud_rate = 115200  # Default baud rate for micro:bit
-    width = 640
-    height = 480
+            print(f'Found micro:bit at {p.device}')
+            break
+    else:
+        error(
+            "No micro:bit connected\n",
+            "Continuing without sending over serial",
+            sep='',
+        )
 
-    cam = None
-    port = None
-    match os:
-        case 'Windows':
-            cam = cv2.VideoCapture(1, cv2.CAP_DSHOW)
-            port = "COM6"
-        case 'Linux':
-            cam = cv2.VideoCapture(0)
-            port = "/dev/ttyACM0"
-        case _:
-            raise NotImplementedError('Unsupported OS')
+    return serial_file
+
+def open_camera(width, height):
+    cam = cv2.VideoCapture(1, cv2.CAP_DSHOW) if (platform.system() == 'Windows') else cv2.VideoCapture(0)
 
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     cam.set(cv2.CAP_PROP_FPS, 30)
     cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    return cam
 
-    ser = None
-    try:
-       ser = serial.Serial(port, baud_rate, timeout=1)
-    except Exception as e:
-        print(f"Error: could not open serial port: {e}")
-        print(f"Continuing without sending over serial")
+def main():
+    tracking_rate = 0.5 # How often to send data to microbit in seconds
+    idle_rate = 3 # How often to send a movement when idling
+    tracking_type = TrackingType.BALL
+
+    ser = open_serial()
+    cam = open_camera(640, 480)
 
     hsv = Hsv(
       hue_low = 40,
