@@ -26,8 +26,8 @@ class HsvValue:
         self.low = low
         self.high = high;
 
-    def setLow(self, val: int): self.low = val
-    def setHigh(self, val: int): self.high = val
+    def set_low(self, val: int): self.low = val
+    def set_high(self, val: int): self.high = val
 
 class Hsv:
     hue = HsvValue(0, 255)
@@ -67,7 +67,7 @@ def new_idle_point(previous_result):
         ret = random.choice(points)
     return ret
 
-def trackFace(frame, face_cascade):
+def track_face(frame, face_cascade):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     faces = face_cascade.detectMultiScale(
@@ -93,11 +93,11 @@ def trackFace(frame, face_cascade):
 
     return None
 
-def trackBall(frame, hsv):
-    frameHSV = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    lowerBound = np.array([ hsv.hue.low, hsv.sat.low, hsv.val.low ])
-    upperBound = np.array([ hsv.hue.high, hsv.sat.high, hsv.val.high ])
-    mask = cv2.inRange(frameHSV, lowerBound, upperBound)
+def track_ball(frame, hsv):
+    frame_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    lower_bound = np.array([ hsv.hue.low, hsv.sat.low, hsv.val.low ])
+    upper_bound = np.array([ hsv.hue.high, hsv.sat.high, hsv.val.high ])
+    mask = cv2.inRange(frame_hsv, lower_bound, upper_bound)
 
     # Erode/dilate passes to remove small artifacts
     mask = cv2.erode(mask, None, iterations=10)
@@ -195,12 +195,12 @@ def main():
         case TrackingType.BALL:
             cv2.namedWindow('tracker')
 
-            cv2.createTrackbar('Hue Low', 'tracker', 40, 179, hsv.hue.setLow)
-            cv2.createTrackbar('Hue High', 'tracker', 80, 179, hsv.hue.setHigh)
-            cv2.createTrackbar('Sat Low', 'tracker', 40, 255, hsv.sat.setLow)
-            cv2.createTrackbar('Sat High', 'tracker', 255, 255, hsv.sat.setHigh)
-            cv2.createTrackbar('Val Low', 'tracker', 40, 255, hsv.val.setLow)
-            cv2.createTrackbar('Val High', 'tracker', 255, 255, hsv.val.setHigh)
+            cv2.createTrackbar('Hue Low', 'tracker', 40, 179, hsv.hue.set_low)
+            cv2.createTrackbar('Hue High', 'tracker', 80, 179, hsv.hue.set_high)
+            cv2.createTrackbar('Sat Low', 'tracker', 40, 255, hsv.sat.set_low)
+            cv2.createTrackbar('Sat High', 'tracker', 255, 255, hsv.sat.set_high)
+            cv2.createTrackbar('Val Low', 'tracker', 40, 255, hsv.val.set_low)
+            cv2.createTrackbar('Val High', 'tracker', 255, 255, hsv.val.set_high)
         case TrackingType.FACE:
             face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
@@ -217,9 +217,9 @@ def main():
 
         match tracking_type:
             case TrackingType.BALL:
-                point = trackBall(frame, hsv)
+                point = track_ball(frame, hsv)
             case TrackingType.FACE:
-                point = trackFace(frame, face_cascade)
+                point = track_face(frame, face_cascade)
 
         if point: # Tracking function returned a point
             x, y = point
