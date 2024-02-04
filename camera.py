@@ -81,7 +81,7 @@ def track_face(frame, net):
             box = faces[0, 0, i, 3:7] * np.array([w, h, w, h])
             (x, y, x1, y1) = box.astype("int")
             cv2.rectangle(frame, (x, y), (x1, y1), (0, 255, 0), 2)
-            return (x + (x1 - x), y + (y1 - y))
+            return (x + (x1 - x) / 2, y + (y1 - y) / 2)
 
     return None
 
