@@ -67,29 +67,21 @@ def new_idle_point(previous_result):
         ret = random.choice(points)
     return ret
 
-def track_face(frame, face_cascade):
+def track_face(frame, net):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    faces = face_cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(30, 30),
-        flags=cv2.CASCADE_SCALE_IMAGE,
-    )
+    h, w = frame.shape[:2]
+    blob = cv2.dnn.blobFromImage(frame)
+    net.setInput(blob)
+    faces = net.forward()
 
-    if len(faces) > 0:
-        largest = (0, 0, 0, 0)
-        for (x, y, w, h) in faces:
-            w2 = largest[2]
-            h2 = largest[3]
-            if w * h > w2 * h2:
-                largest = (x, y, w, h)
-
-        x, y, w, h = largest
-        if w > 100:
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            return (x + w / 2, y + h / 2)
+    for i in range(faces.shape[2]):
+        confidence = faces[0, 0, i, 2]
+        if confidence > 0.5:
+            box = faces[0, 0, i, 3:7] * np.array([w, h, w, h])
+            (x, y, x1, y1) = box.astype("int")
+            cv2.rectangle(frame, (x, y), (x1, y1), (0, 255, 0), 2)
+            return (x + (x1 - x), y + (y1 - y))
 
     return None
 
@@ -178,7 +170,7 @@ def open_camera(width, height):
 def main():
     tracking_rate = 0.5 # How often to send data to microbit in seconds
     idle_rate = 3 # How often to send a movement when idling
-    tracking_type = TrackingType.BALL
+    tracking_type = TrackingType.FACE
 
     ser = open_serial()
     cam = open_camera(640, 480)
@@ -190,7 +182,7 @@ def main():
       val_low = 40,
     )
 
-    face_cascade = None
+    net = None
     match tracking_type:
         case TrackingType.BALL:
             cv2.namedWindow('tracker')
@@ -202,7 +194,7 @@ def main():
             cv2.createTrackbar('Val Low', 'tracker', 40, 255, hsv.val.set_low)
             cv2.createTrackbar('Val High', 'tracker', 255, 255, hsv.val.set_high)
         case TrackingType.FACE:
-            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            net = cv2.dnn.readNetFromCaffe('weights-prototxt.txt', 'res_ssd_300Dim.caffeModel')
 
     # Keeps track of whether we were idling or tracking,
     # so we can print the new state to the terminal
@@ -210,6 +202,7 @@ def main():
 
     # The last point returned by `new_idle_point`
     idle_point = None
+
 
     last_send_time = time.time_ns()
     while True:
@@ -219,7 +212,7 @@ def main():
             case TrackingType.BALL:
                 point = track_ball(frame, hsv)
             case TrackingType.FACE:
-                point = track_face(frame, face_cascade)
+                point = track_face(frame, net)
 
         if point: # Tracking function returned a point
             x, y = point
