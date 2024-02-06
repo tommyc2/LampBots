@@ -81,7 +81,8 @@ def track_face(frame, net):
             box = faces[0, 0, i, 3:7] * np.array([w, h, w, h])
             (x, y, x1, y1) = box.astype("int")
             cv2.rectangle(frame, (x, y), (x1, y1), (0, 255, 0), 2)
-            return (x + (x1 - x) / 2, y + (y1 - y) / 2)
+            area = (x1 - x) * (y1 - y)
+            return (x + (x1 - x) / 2, y + (y1 - y) / 2, float(area) ** -1 * 18000)
 
     return None
 
@@ -98,7 +99,6 @@ def track_ball(frame, hsv):
     # Find contours in the mask
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    z=0
     if contours:
         # Filter contours based on area
         valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 100]
@@ -107,31 +107,26 @@ def track_ball(frame, hsv):
             # Get the largest contour (presumably the green ball)
             largest_contour = max(contours, key=cv2.contourArea)
             x, y, w, h = cv2.boundingRect(largest_contour)
-            mappingZ = w * h
-            z = (mappingZ**-1)*180000
-            print(f"w={w}, h={h}")
-            print(f"z = {z}")
 
             # Draw a rectangle around the detected ball
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-            return (x + w / 2, y + h / 2, z)
-
+            return (x + w / 2, y + h / 2, float(w * h) ** -1 * 18000)
+    
     return None
 
 def send_data(file, x, y, z):
-    if file is None:
-        print(f"Data: {x},{y}")
-        return
+    y = max(70, (y / 480) * 270)
 
-    try:
-        # Map `y` to a range between 70-270, as we don't need the full 180 degrees of movement.
-        y = max(70, (y / 480) * 270)
-        file.write(f"{x},{y},{z}\r\n".encode())
-        print(f"Data sent: {x},{y},{z}")
+    if file is not None:
+        try:
+            # Map `y` to a range between 70-270, as we don't need the full 180 degrees of movement.
+            file.write(f"{x},{y},{z}\r\n".encode())
 
-    except Exception as e:
-        error(f"Error: {e}")
+        except Exception as e:
+            error(f"Error: {e}")
+
+    print(f"Data sent: {x},{y},{z}")
 
 def open_serial():
     # See https://support.microbit.org/support/solutions/articles/19000035697-what-are-the-usb-vid-pid-numbers-for-micro-bit
