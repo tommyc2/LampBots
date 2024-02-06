@@ -50,15 +50,15 @@ def error(*args, **kwargs):
 # and returns it.
 def new_idle_point(previous_result):
     points = [
-        (350, 320),
-        (100, 360),
-        (250, 368),
-        (400, 280),
-        (450, 280),
-        (480, 280),
-        (350, 320),
-        (300, 360),
-        (250, 368),
+        (350, 320,0),
+        (100, 360,0),
+        (250, 368,0),
+        (400, 280,0),
+        (450, 280,0),
+        (480, 280,0),
+        (350, 320,0),
+        (300, 360,0),
+        (250, 368,0),
     ]
 
     ret = random.choice(points)
@@ -98,6 +98,7 @@ def track_ball(frame, hsv):
     # Find contours in the mask
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+    z=0
     if contours:
         # Filter contours based on area
         valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 100]
@@ -106,15 +107,19 @@ def track_ball(frame, hsv):
             # Get the largest contour (presumably the green ball)
             largest_contour = max(contours, key=cv2.contourArea)
             x, y, w, h = cv2.boundingRect(largest_contour)
+            mappingZ = w * h
+            z = (mappingZ**-1)*180000
+            print(f"w={w}, h={h}")
+            print(f"z = {z}")
 
             # Draw a rectangle around the detected ball
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-            return (x + w / 2, y + h / 2)
+            return (x + w / 2, y + h / 2, z)
 
     return None
 
-def send_data(file, x, y):
+def send_data(file, x, y, z):
     if file is None:
         print(f"Data: {x},{y}")
         return
@@ -122,8 +127,8 @@ def send_data(file, x, y):
     try:
         # Map `y` to a range between 70-270, as we don't need the full 180 degrees of movement.
         y = max(70, (y / 480) * 270)
-        file.write(f"{x},{y}\r\n".encode())
-        print(f"Data sent: {x},{y}")
+        file.write(f"{x},{y},{z}\r\n".encode())
+        print(f"Data sent: {x},{y},{z}")
 
     except Exception as e:
         error(f"Error: {e}")
@@ -215,7 +220,7 @@ def main():
                 point = track_face(frame, net)
 
         if point: # Tracking function returned a point
-            x, y = point
+            x,y,z = point
             now = time.time_ns()
 
             # Check if `tracking_rate` seconds have passed since `last_send_time`
@@ -225,7 +230,7 @@ def main():
                     tracking_state = TrackingState.TRACKING
 
                 last_send_time = now
-                send_data(ser, x, y)
+                send_data(ser, x, y, z)
         else: # Didn't detect anything, idle
             now = time.time_ns()
 
