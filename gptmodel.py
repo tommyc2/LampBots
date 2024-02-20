@@ -1,7 +1,7 @@
 import openai # Importing OpenAI
 from filter_prompt import filter
 
-openai.api_key = "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"
+openai.api_key = "API_KEY"
 
 messages = [{"role": "system", "content": ""}]
 
