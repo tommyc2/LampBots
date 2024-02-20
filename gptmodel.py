@@ -1,0 +1,23 @@
+import openai # Importing OpenAI
+from filter_prompt import filter
+
+openai.api_key = "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"
+
+messages = [{"role": "system", "content": ""}]
+
+def CustomChatGPT(prompt):
+    messages.append({"role": "user", "content": prompt})
+    response = openai.ChatCompletion.create(
+        model = "gpt-3.5-turbo",
+        messages = messages
+    )
+    ChatGPT_reply = response["choices"][0]["message"]["content"]
+    messages.append({"role": "assistant", "content": ChatGPT_reply})
+
+    if filter(ChatGPT_reply.lower()):
+        return "Sorry, please try again"
+    else:
+        print("Reply:", ChatGPT_reply.lower())
+        return ChatGPT_reply
+
+print(CustomChatGPT("PROMPT")) #Testing prompt input
