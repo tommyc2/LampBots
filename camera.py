@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# TODO: Calibrate x/y values when all servos are installed
 import numpy as np
 import cv2
 import serial
@@ -8,6 +7,7 @@ import time
 import random
 import platform
 import sys
+import math
 from enum import Enum
 
 class TrackingType(Enum):
@@ -50,21 +50,19 @@ def error(*args, **kwargs):
 # and returns it.
 def new_idle_point(previous_result):
     points = [
-        (350, 320,0),
-        (100, 360,0),
-        (250, 368,0),
-        (400, 280,0),
-        (450, 280,0),
-        (480, 280,0),
-        (350, 320,0),
-        (300, 360,0),
-        (250, 368,0),
+        (70, 70, 90, 70),
+        (113, 80, 95, 70),
+        (127, 90, 99, 70),
+        (135, 75, 85, 70),
+        (98, 75, 82, 70),
+        (84, 60, 90, 70),
+        (70, 55, 82, 70),
     ]
 
     ret = random.choice(points)
     # Keep picking until the result is not the same as the previous one
-    while ret == previous_result:
-        ret = random.choice(points)
+    # while ret == previous_result:
+    #     ret = random.choice(points)
     return ret
 
 def track_face(frame, net):
@@ -81,8 +79,26 @@ def track_face(frame, net):
             box = faces[0, 0, i, 3:7] * np.array([w, h, w, h])
             (x, y, x1, y1) = box.astype("int")
             cv2.rectangle(frame, (x, y), (x1, y1), (0, 255, 0), 2)
-            area = (x1 - x) * (y1 - y)
-            return (x + (x1 - x) / 2, y + (y1 - y) / 2, float(area) ** -1 * 18000)
+            distance = (14.5 * 450) / (x1 - x)
+            if (distance < 60): continue
+            distance = max(0, distance - 120)
+            y = y + (y1 - y) / 2
+            x = (x + (x1 - x) / 2)
+            w = round(math.floor(x / (640 / 3)))
+            x = 640 - x
+            match w:
+                case 0:
+                    x = round(x / 640 * 24 + 53)
+                case 1:
+                    x = round(x / 640 * 24 + 77)
+                case 2:
+                    x = round(x / 640 * 24 + 103)
+            return (
+                x,
+                round(y / 480 * 45 + 45),
+                round(distance / 6) + 82,
+                65 + 25 * w,
+            )
 
     return None
 
@@ -101,9 +117,9 @@ def track_ball(frame, hsv):
 
     if contours:
         # Filter contours based on area
-        valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 100]
+        # valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 100]
 
-        if valid_contours:
+        if contours:
             # Get the largest contour (presumably the green ball)
             largest_contour = max(contours, key=cv2.contourArea)
             x, y, w, h = cv2.boundingRect(largest_contour)
@@ -111,22 +127,25 @@ def track_ball(frame, hsv):
             # Draw a rectangle around the detected ball
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-            return (x + w / 2, y + h / 2, float(w * h) ** -1 * 18000)
+            z = round(w * h / 307200 * 40) + 80
+            return (
+                x + w / 2,
+                y + h / 2,
+                z,
+                70,
+            )
     
     return None
 
-def send_data(file, x, y, z):
-    y = max(70, (y / 480) * 270)
-
+def send_data(file, x, y, z, w):
     if file is not None:
         try:
-            # Map `y` to a range between 70-270, as we don't need the full 180 degrees of movement.
-            file.write(f"{x},{y},{z}\r\n".encode())
+            file.write(f"{x},{y},{z},{w}\r\n".encode())
 
         except Exception as e:
             error(f"Error: {e}")
 
-    print(f"Data sent: {x},{y},{z}")
+    print(f"Data sent: {x},{y},{z},{w}")
 
 def open_serial():
     # See https://support.microbit.org/support/solutions/articles/19000035697-what-are-the-usb-vid-pid-numbers-for-micro-bit
@@ -159,11 +178,11 @@ def open_serial():
     return serial_file
 
 def open_camera(width, height):
-    cam = cv2.VideoCapture(1, cv2.CAP_DSHOW) if (platform.system() == 'Windows') else cv2.VideoCapture(0)
+    cam = cv2.VideoCapture(2, cv2.CAP_DSHOW) if (platform.system() == 'Windows') else cv2.VideoCapture(2)
 
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cam.set(cv2.CAP_PROP_FPS, 30)
+    cam.set(cv2.CAP_PROP_FPS, 10)
     cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     return cam
 
@@ -215,7 +234,7 @@ def main():
                 point = track_face(frame, net)
 
         if point: # Tracking function returned a point
-            x,y,z = point
+            x,y,z,w = point
             now = time.time_ns()
 
             # Check if `tracking_rate` seconds have passed since `last_send_time`
@@ -225,8 +244,8 @@ def main():
                     tracking_state = TrackingState.TRACKING
 
                 last_send_time = now
-                send_data(ser, x, y, z)
-        else: # Didn't detect anything, idle
+                send_data(ser, x, y, z, w)
+        else:
             now = time.time_ns()
 
             # Check if `idle_rate` seconds have passed since `last_send_time`
@@ -235,9 +254,9 @@ def main():
                     print("\r\nIdling...")
                     tracking_state = TrackingState.IDLE
 
-                idle_point = new_idle_point(idle_point)
+                x, y, z, w = new_idle_point(idle_point)
                 last_send_time = now
-                send_data(ser, *idle_point)
+                send_data(ser, x, y, z, w)
 
         cv2.imshow('camera', frame)
         cv2.waitKey(1)
