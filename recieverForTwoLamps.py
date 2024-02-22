@@ -34,7 +34,7 @@ EyeX1 = 3
 EyeY1 = 3
 
 def on_forever():
-    global EyeY, EyeY1, EyeX
+    global EyeY, EyeY1, EyeX, EyeX1
     Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO4, x)
     Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO3, y)
     Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO2, w)
@@ -87,4 +87,6 @@ def on_forever():
         EyeX1 = 2
     else:
         EyeX1 = 1
+    serial.write_number(EyeY1)
+    serial.write_number(EyeX1)
 basic.forever(on_forever)
