@@ -13,11 +13,6 @@ def CustomChatGPT(prompt):
     )
     ChatGPT_reply = response["choices"][0]["message"]["content"]
     messages.append({"role": "assistant", "content": ChatGPT_reply})
-
-    if filter(ChatGPT_reply.lower()):
-        return "Sorry, please try again"
-    else:
-        print("Reply:", ChatGPT_reply.lower())
-        return ChatGPT_reply
+    return ChatGPT_reply
 
 print(CustomChatGPT("PROMPT")) #Testing prompt input
