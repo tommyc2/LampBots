@@ -51,21 +51,57 @@ def error(*args, **kwargs):
 def new_idle_point(previous_result):
     points = [
         (70, 70, 90, 70),
-        (113, 80, 95, 70),
-        (127, 90, 99, 70),
-        (135, 75, 85, 70),
-        (98, 75, 82, 70),
-        (84, 60, 90, 70),
+        (113, 80, 95, 80),
+        (127, 90, 99, 90),
+        (135, 75, 85, 100),
+        (98, 75, 82, 90),
+        (84, 60, 90, 80),
         (70, 55, 82, 70),
     ]
 
     ret = random.choice(points)
     # Keep picking until the result is not the same as the previous one
-    # while ret == previous_result:
-    #     ret = random.choice(points)
+    while ret == previous_result:
+        ret = random.choice(points)
     return ret
 
-def track_face(frame, net):
+def get_confidence(faces, index):
+    return faces[0, 0, index, 2]
+
+# Returns the coordinates to send to a lamp for tracking a certain face
+def coords_from_face(frame, faces, index, width, height):
+    h, w = frame.shape[:2]
+
+    # Get the upper left and lower right coordinates of the detected face
+    box = faces[0, 0, index, 3:7] * np.array([w, h, w, h])
+    (x, y, x1, y1) = box.astype("int")
+
+    # Draw a green rectangle around the detected face
+    cv2.rectangle(frame, (x, y), (x1, y1), (0, 255, 0), 2)
+
+    # Distance in cm
+    distance = (14.5 * 450) / (x1 - x)
+
+    # TODO: Re-enable this check somehow
+    # if (distance < 60): continue
+
+    # Subtract 120 from distance, with minimum of zero for calculations
+    distance = max(0, distance - 120)
+
+    y = y + (y1 - y) / 2 # Center y coord in box
+    x = (x + (x1 - x) / 2) # Center x coord in box
+    x = width - x # Invert x value
+    return (
+        round(x / width * 48 + 66), # Map x value to 66-114
+        round(y / height * 45 + 45), # Map y value to 45-90
+        round(distance / 6) + 82, # Map z value to 82 + distance/6 TODO: add a max distance?
+        24 - round(x / width * 24) + 78, # Map inverted w value to 78-102
+    )
+
+# TODO: If we have two faces, make the right lamp track the face on the right and vice-versa
+#       so they don't cross paths
+
+def track_face(frame, width, height, net):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     h, w = frame.shape[:2]
@@ -73,37 +109,34 @@ def track_face(frame, net):
     net.setInput(blob)
     faces = net.forward()
 
+    # Find the 2 faces with the highest confidence
+    best = None
+    second = None
     for i in range(faces.shape[2]):
-        confidence = faces[0, 0, i, 2]
-        if confidence > 0.5:
-            box = faces[0, 0, i, 3:7] * np.array([w, h, w, h])
-            (x, y, x1, y1) = box.astype("int")
-            cv2.rectangle(frame, (x, y), (x1, y1), (0, 255, 0), 2)
-            distance = (14.5 * 450) / (x1 - x)
-            if (distance < 60): continue
-            distance = max(0, distance - 120)
-            y = y + (y1 - y) / 2
-            x = (x + (x1 - x) / 2)
-            w = round(math.floor(x / (640 / 3)))
-            x = 640 - x
-            match w:
-                case 0:
-                    x = round(x / 640 * 24 + 53)
-                case 1:
-                    x = round(x / 640 * 24 + 77)
-                case 2:
-                    x = round(x / 640 * 24 + 103)
-            return (
-                x,
-                round(y / 480 * 45 + 45),
-                round(distance / 6) + 82,
-                65 + 25 * w,
-            )
+        confidence = get_confidence(faces, i)
+        if best is None or confidence > get_confidence(faces, best):
+            second = best
+            best = i
+        elif second is None or confidence > get_confidence(faces, second):
+            second = i
 
-    return None
+    if best is None or get_confidence(faces, best) < 0.5:
+        # No confidence >= 0.5
+        return None
 
-def track_ball(frame, hsv):
-    frame_hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    p1 = coords_from_face(frame, faces, best, width, height)
+
+    # Return p1 twice if we don't have a second face
+    p2 = p1
+    if second is not None and get_confidence(faces, second) > 0.5:
+        # We have a second face in frame
+        p2 = coords_from_face(frame, faces, second, width, height)
+
+    return (p1, p2)
+
+def track_ball(frame, width, height, hsv):
+    blurred = cv2.GaussianBlur(frame, (11, 11), 0)
+    frame_hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
     lower_bound = np.array([ hsv.hue.low, hsv.sat.low, hsv.val.low ])
     upper_bound = np.array([ hsv.hue.high, hsv.sat.high, hsv.val.high ])
     mask = cv2.inRange(frame_hsv, lower_bound, upper_bound)
@@ -116,36 +149,32 @@ def track_ball(frame, hsv):
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     if contours:
-        # Filter contours based on area
-        # valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 100]
+        # Get the largest contour (presumably the green ball)
+        largest_contour = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(largest_contour)
 
-        if contours:
-            # Get the largest contour (presumably the green ball)
-            largest_contour = max(contours, key=cv2.contourArea)
-            x, y, w, h = cv2.boundingRect(largest_contour)
+        # Draw a rectangle around the detected ball
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-            # Draw a rectangle around the detected ball
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-            z = round(w * h / 307200 * 40) + 80
-            return (
-                x + w / 2,
-                y + h / 2,
-                z,
-                70,
+        z = round(w * h / 307200 * 40) + 80
+        return (
+            x + w / 2,
+            y + h / 2,
+            z,
+            70,
             )
     
     return None
 
-def send_data(file, x, y, z, w):
+def send_data(file, x1, y1, z1, w1, x2, y2, z2, w2):
     if file is not None:
         try:
-            file.write(f"{x},{y},{z},{w}\r\n".encode())
+            file.write(f"{x1},{y1},{z1},{w1},{x2},{y2},{z2},{w2}\r\n".encode())
 
         except Exception as e:
             error(f"Error: {e}")
 
-    print(f"Data sent: {x},{y},{z},{w}")
+    print(f"Data sent: {x1},{y1},{z1},{w1}    {x2},{y2},{z2},{w2}")
 
 def open_serial():
     # See https://support.microbit.org/support/solutions/articles/19000035697-what-are-the-usb-vid-pid-numbers-for-micro-bit
@@ -189,10 +218,13 @@ def open_camera(width, height):
 def main():
     tracking_rate = 0.5 # How often to send data to microbit in seconds
     idle_rate = 3 # How often to send a movement when idling
-    tracking_type = TrackingType.FACE
+    tracking_type = TrackingType.BALL
+
+    width = 640
+    height = 480
 
     ser = open_serial()
-    cam = open_camera(640, 480)
+    cam = open_camera(width, height)
 
     hsv = Hsv(
       hue_low = 40,
@@ -220,21 +252,23 @@ def main():
     tracking_state = None
 
     # The last point returned by `new_idle_point`
-    idle_point = None
-
+    last_idle_point = None
 
     last_send_time = time.time_ns()
     while True:
         _, frame = cam.read()
 
+        point1 = None
+        point2 = None
         match tracking_type:
             case TrackingType.BALL:
-                point = track_ball(frame, hsv)
+                point1 = track_ball(frame, width, height, hsv)
+                point2 = point1
             case TrackingType.FACE:
-                point = track_face(frame, net)
+                p = track_face(frame, width, height, net)
+                if p is not None: (point1, point2) = p
 
-        if point: # Tracking function returned a point
-            x,y,z,w = point
+        if point1: # Tracking function returned a point
             now = time.time_ns()
 
             # Check if `tracking_rate` seconds have passed since `last_send_time`
@@ -244,7 +278,7 @@ def main():
                     tracking_state = TrackingState.TRACKING
 
                 last_send_time = now
-                send_data(ser, x, y, z, w)
+                send_data(ser, *point1, *point2)
         else:
             now = time.time_ns()
 
@@ -254,9 +288,10 @@ def main():
                     print("\r\nIdling...")
                     tracking_state = TrackingState.IDLE
 
-                x, y, z, w = new_idle_point(idle_point)
+                x, y, z, w = new_idle_point(last_idle_point)
                 last_send_time = now
-                send_data(ser, x, y, z, w)
+                # Currently sends the same point to both lamps
+                send_data(ser, x, y, z, w, x, y, z, w)
 
         cv2.imshow('camera', frame)
         cv2.waitKey(1)
