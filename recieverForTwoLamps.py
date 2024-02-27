@@ -35,14 +35,14 @@ EyeY1 = 3
 
 def on_forever():
     global EyeY, EyeY1, EyeX, EyeX1
+    Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO6, z1)
+    Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO5, w1)
     Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO4, x)
     Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO3, y)
     Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO2, w)
     Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO1, z)
     Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO8, x1)
     Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO7, y1)
-    Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO6, z1)
-    Kitronik_Robotics_Board.servo_write(Kitronik_Robotics_Board.Servos.SERVO5, w1)
     if y > 36:
         EyeY = 5
     elif y > 72:
