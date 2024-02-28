@@ -68,8 +68,8 @@ def new_idle_point(previous_result):
 def get_confidence(faces, index):
     return faces[0, 0, index, 2]
 
-# Returns the coordinates to send to a lamp for tracking a certain face
-def coords_from_face(frame, faces, index, width, height):
+# Returns the servo values to send to a lamp for tracking a certain face
+def servo_values_from_face(frame, faces, index, width, height):
     h, w = frame.shape[:2]
 
     # Get the upper left and lower right coordinates of the detected face
@@ -86,29 +86,32 @@ def coords_from_face(frame, faces, index, width, height):
     # TODO: Re-enable this check somehow
     # if (distance < 60): continue
 
+    x = x + (x1 - x) / 2 # Center x coord in box
     y = y + (y1 - y) / 2 # Center y coord in box
-    x = (x + (x1 - x) / 2) # Center x coord in box
-    x = width - x # Invert x coordinate
 
-    length = abs(x - 320)
-    angle = round(math.degrees((math.atan(pixel_dist / length))))
-    if x > 320: angle = 90 + (90 - angle)
-    diff = angle - 90
+    # The pixel offset from the center of the camera to the x coordinate
+    offset = x - width / 2
+
+    if offset == 0:
+        # If offset is zero we would get a division by zero, so special case this.
+        # 0 offset means center, which is 90 degrees on the head
+        angle = 90
+    else:
+        # Trigonometry - atan(o/a), where o is the distance and a is the offset
+        angle = round(math.degrees((math.atan(pixel_dist / abs(offset)))))
+
+        # Invert the angle if the target is left of center
+        if offset < 0:
+            angle = 180 - angle
 
     # Subtract 120 from distance, with minimum of zero for calculations
     distance = max(0, distance - 120)
-    z = min(105, round(distance / 6) + 82)
     return (
-        90 + diff / 4 * 3,
-         # round(x / width * 40 + 70), # Map x value to 66-114
+        angle,
         round(y / height * 45 + 45), # Map y value to 45-90
-        z, # Map z value to 82 + distance/6
-        80 - diff / 4,
-        # 24 - round(x / width * 24) + 68, # Map inverted w value to 78-102
+        min(105, round(distance / 6) + 82), # Map z value to 82 + distance/6, with max of 105
+        80, # TODO: Get w servo working nicely
     )
-
-# TODO: If we have two faces, make the right lamp track the face on the right and vice-versa
-#       so they don't cross paths
 
 def track_face(frame, width, height, net):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -133,13 +136,13 @@ def track_face(frame, width, height, net):
         # No confidence >= 0.5
         return None
 
-    p1 = coords_from_face(frame, faces, best, width, height)
+    p1 = servo_values_from_face(frame, faces, best, width, height)
 
     # Return p1 twice if we don't have a second face
     p2 = p1
     if second is not None and get_confidence(faces, second) > 0.5:
         # We have a second face in frame
-        p2 = coords_from_face(frame, faces, second, width, height)
+        p2 = servo_values_from_face(frame, faces, second, width, height)
 
     # If the left lamp (p2) is trying to track a target further right than the other lamp
     # then swap the points
@@ -190,8 +193,7 @@ def send_data(file, x1, y1, z1, w1, x2, y2, z2, w2):
         except Exception as e:
             error(f"Error: {e}")
 
-    print(f"0 sent: {x1},{y1},{z1},{w1}")
-    print(f"1 sent: {x2},{y2},{z2},{w2}\n")
+    print(f"Sent: {x1},{y1},{z1},{w1}    {x2},{y2},{z2},{w2}")
 
 def open_serial():
     # See https://support.microbit.org/support/solutions/articles/19000035697-what-are-the-usb-vid-pid-numbers-for-micro-bit
@@ -224,7 +226,15 @@ def open_serial():
     return serial_file
 
 def open_camera(width, height):
-    cam = cv2.VideoCapture(2, cv2.CAP_DSHOW) if (platform.system() == 'Windows') else cv2.VideoCapture(2)
+    if platform.system() == 'Windows':
+        cam = cv2.VideoCapture(2, cv2.CAP_DSHOW)
+    else:
+        cam = cv2.VideoCapture(2)
+
+        # Workaround for differing /dev/video* numbers between laptops
+        # TODO: Use /dev/v4l/by-id/*
+        if cam is None or not cam.isOpened():
+            cam = cv2.VideoCapture(1)
 
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
