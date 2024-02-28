@@ -50,13 +50,13 @@ def error(*args, **kwargs):
 # and returns it.
 def new_idle_point(previous_result):
     points = [
-        (70, 70, 90, 70),
-        (113, 80, 95, 80),
-        (127, 90, 99, 90),
+        ( 70, 70, 90,  70),
+        (113, 80, 95,  80),
+        (127, 90, 99,  90),
         (135, 75, 85, 100),
-        (98, 75, 82, 90),
-        (84, 60, 90, 80),
-        (70, 55, 82, 70),
+        ( 98, 75, 82,  90),
+        ( 84, 60, 90,  80),
+        ( 70, 55, 82,  70),
     ]
 
     ret = random.choice(points)
@@ -81,21 +81,30 @@ def coords_from_face(frame, faces, index, width, height):
 
     # Distance in cm
     distance = (14.5 * 450) / (x1 - x)
+    pixel_dist = (x1 - x) * 450 / 14.5
 
     # TODO: Re-enable this check somehow
     # if (distance < 60): continue
 
-    # Subtract 120 from distance, with minimum of zero for calculations
-    distance = max(0, distance - 120)
-
     y = y + (y1 - y) / 2 # Center y coord in box
     x = (x + (x1 - x) / 2) # Center x coord in box
-    x = width - x # Invert x value
+    x = width - x # Invert x coordinate
+
+    length = abs(x - 320)
+    angle = round(math.degrees((math.atan(pixel_dist / length))))
+    if x > 320: angle = 90 + (90 - angle)
+    diff = angle - 90
+
+    # Subtract 120 from distance, with minimum of zero for calculations
+    distance = max(0, distance - 120)
+    z = min(105, round(distance / 6) + 82)
     return (
-        round(x / width * 48 + 66), # Map x value to 66-114
+        90 + diff / 4 * 3,
+         # round(x / width * 40 + 70), # Map x value to 66-114
         round(y / height * 45 + 45), # Map y value to 45-90
-        round(distance / 6) + 82, # Map z value to 82 + distance/6 TODO: add a max distance?
-        24 - round(x / width * 24) + 78, # Map inverted w value to 78-102
+        z, # Map z value to 82 + distance/6
+        80 - diff / 4,
+        # 24 - round(x / width * 24) + 68, # Map inverted w value to 78-102
     )
 
 # TODO: If we have two faces, make the right lamp track the face on the right and vice-versa
@@ -131,6 +140,13 @@ def track_face(frame, width, height, net):
     if second is not None and get_confidence(faces, second) > 0.5:
         # We have a second face in frame
         p2 = coords_from_face(frame, faces, second, width, height)
+
+    # If the left lamp (p2) is trying to track a target further right than the other lamp
+    # then swap the points
+    if p2[0] > p1[0]:
+        p3 = p2
+        p2 = p1
+        p1 = p3
 
     return (p1, p2)
 
@@ -169,12 +185,13 @@ def track_ball(frame, width, height, hsv):
 def send_data(file, x1, y1, z1, w1, x2, y2, z2, w2):
     if file is not None:
         try:
-            file.write(f"{x1},{y1},{z1},{w1},{x2},{y2},{z2},{w2}\r\n".encode())
+            file.write(f'{x1},{y1},{z1},{w1}\n{x2},{y2},{z2},{w2}\n'.encode())
 
         except Exception as e:
             error(f"Error: {e}")
 
-    print(f"Data sent: {x1},{y1},{z1},{w1}    {x2},{y2},{z2},{w2}")
+    print(f"0 sent: {x1},{y1},{z1},{w1}")
+    print(f"1 sent: {x2},{y2},{z2},{w2}\n")
 
 def open_serial():
     # See https://support.microbit.org/support/solutions/articles/19000035697-what-are-the-usb-vid-pid-numbers-for-micro-bit
@@ -216,9 +233,9 @@ def open_camera(width, height):
     return cam
 
 def main():
-    tracking_rate = 0.5 # How often to send data to microbit in seconds
+    tracking_rate = 0.1 # How often to send data to microbit in seconds
     idle_rate = 3 # How often to send a movement when idling
-    tracking_type = TrackingType.BALL
+    tracking_type = TrackingType.FACE
 
     width = 640
     height = 480
