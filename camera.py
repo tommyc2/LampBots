@@ -229,12 +229,7 @@ def open_camera(width, height):
     if platform.system() == 'Windows':
         cam = cv2.VideoCapture(2, cv2.CAP_DSHOW)
     else:
-        cam = cv2.VideoCapture(2)
-
-        # Workaround for differing /dev/video* numbers between laptops
-        # TODO: Use /dev/v4l/by-id/*
-        if cam is None or not cam.isOpened():
-            cam = cv2.VideoCapture(1)
+        cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
 
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
