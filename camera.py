@@ -10,6 +10,7 @@ import sys
 import math
 from enum import Enum
 from typing import Optional
+ServoValues = tuple[int, int, int, int]
 
 class TrackingType(Enum):
     BALL = 1
@@ -76,6 +77,12 @@ class Rect:
     def __mul__(self: 'Rect', value) -> 'Rect':
         return Rect(self.tl * value, self.br * value)
 
+    def width(self: 'Rect') -> float:
+        return self.br.x - self.tl.x
+
+    def height(self: 'Rect') -> float:
+        return self.br.y - self.tl.y
+
     @staticmethod
     def from_points(x1, y1, x2, y2) -> 'Rect':
         return Rect(Point(x1, y1), Point(x2, y2))
@@ -86,7 +93,7 @@ def error(*args, **kwargs):
 
 # Selects a random point from a predefined list of points until it is not `previous_result`,
 # and returns it.
-def new_idle_point(previous_result):
+def new_idle_point(previous_result) -> ServoValues:
     points = [
         ( 70, 70, 90, 90),
         (113, 80, 95, 90),
@@ -103,14 +110,15 @@ def new_idle_point(previous_result):
         ret = random.choice(points)
     return ret
 
-def get_confidence(faces, index):
-    return faces[0, 0, index, 2]
-
-def get_distance(width):
+def get_distance(width) -> float:
     return 14.5 * 450 / width
 
+def get_pixel_dist(width: float) -> float:
+    pixels_per_cm = width / 14.5
+    return get_distance(width) * pixels_per_cm
+
 # Returns the servo values to send to a lamp for tracking a rectangle
-def servo_values_from_rect(frame, rect: Rect, x_off: float) -> tuple[int, int, int, int]:
+def servo_values_from_rect(frame, rect: Rect, x_off: float) -> ServoValues:
     h, w = frame.shape[:2]
     x, y = (rect.tl.x, rect.tl.y)
     x1, y1 = (rect.br.x, rect.br.y)
@@ -119,17 +127,14 @@ def servo_values_from_rect(frame, rect: Rect, x_off: float) -> tuple[int, int, i
     cv2.rectangle(frame, (round(x), round(y)), (round(x1), round(y1)), (0, 255, 0), 2)
 
     # Distance in cm
-    distance = get_distance(x1 - x)
-    pixel_dist = (x1 - x) * 450 / 14.5
-
-    # TODO: Re-enable this check somehow
-    # if (distance < 60): continue
+    distance = get_distance(rect.width())
+    pixel_dist = get_pixel_dist(rect.width())
 
     x = x + (x1 - x) / 2 # Center x coord in box
     y = y + (y1 - y) / 2 # Center y coord in box
 
     # The pixel offset from the center of the camera to the x coordinate
-    offset = x - w / 2 - + x_off
+    offset = x - w / 2 + x_off
 
     if offset == 0:
         # If offset is zero we would get a division by zero, so special case this.
@@ -143,13 +148,19 @@ def servo_values_from_rect(frame, rect: Rect, x_off: float) -> tuple[int, int, i
         if offset < 0:
             angle = 180 - angle
 
+    # diff = angle - 90
+    # x = 90 + diff / 4 * 3
+    # w = 90 - diff / 4
+    x = angle
+    w = 90
+
     # Subtract 120 from distance, with minimum of zero for calculations
     distance = max(0, distance - 120)
     return (
-        angle,
+        round(x),
         round(y / h * 65 + 50), # Map y value to 50-115
         min(105, round(distance / 6) + 82), # Map z value to 82 + distance/6, with max of 105
-        90, # TODO: Get w servo working nicely
+        round(w), # TODO: Get w servo working nicely
     )
 
 # Returns two rectangles bounding two faces in the given frame. Returns (r1, None) if only one
@@ -213,7 +224,7 @@ def get_servo_values(
     frame,
     r1: Optional[Rect],
     r2: Optional[Rect],
-) -> tuple[Optional[tuple[int, int, int, int]], Optional[tuple[int, int, int, int]]]:
+) -> tuple[Optional[ServoValues], Optional[ServoValues]]:
     if r1 is None:
         assert r2 is None
         return None, None
@@ -222,10 +233,11 @@ def get_servo_values(
     v1 = servo_values_from_rect(frame, r1, 0)
 
     # Return v1 twice if we don't have a second face
-    v2 = v1
     if r2 is not None:
         # We have a second face in frame
         v2 = servo_values_from_rect(frame, r2, 0)
+    else:
+        v2 = servo_values_from_rect(frame, r1, 0)
 
     # If the left lamp (v2) is trying to track a target further right than the other lamp
     # then swap the points
@@ -303,7 +315,7 @@ def open_serial() -> Optional[serial.Serial]:
 
     return serial_file
 
-def open_camera(width: int, height: int):
+def open_camera(width: int, height: int) -> cv2.VideoCapture:
     if platform.system() == 'Windows':
         cam = cv2.VideoCapture(2, cv2.CAP_DSHOW)
     else:
@@ -410,4 +422,4 @@ except KeyboardInterrupt:
     pass
 
 ser = open_serial()
-send_data(ser, 90, 60, 82, 90, 90, 60, 82, 90)
+send_data(ser, 90, 50, 82, 90, 90, 50, 82, 90)
