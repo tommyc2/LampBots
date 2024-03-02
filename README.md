@@ -1,23 +1,24 @@
-# LAMP-Bot-Project
- LAMP Bot Team Project 
+# Lamp Bot Project:
 
- Title: LampBot OpenCV Integration Repository
+- Project Iteration on a servo controlled lamp using OpenCV library & Python.
 
-Description: Explore the LampBot OpenCV Integration repository, a hub for seamlessly combining servo controls with OpenCV functionalities. Below is an overview of key operations in the code:
+## Servo Functions:
 
-# 	1.	Webcam Setup using OpenCV:
+- <b>Head Servo: </b>Moves the lamp's head side to side along the x-axis.
+- <b> Middle Servo:</b>Adjusts the lamp's head up and down along the y-axis.
+- <b> Bottom Servo: </b>Moves the lamp back and forwards based on the distance of objects or people, controlled along the z-axis.
+- <b>Servo mounted to plank: </b> Moves the lamp's body side to side along an imaginary "w" axis.
 
-import cv2
+## Data Transmission:
+- Data from the OpenCV script is sent from a laptop to a microbit via serial communication.
+- The receiving microbit maps coordinates to the servo motors' movement capabilities.
 
-## Open a connection to the webcam (0 denotes the default camera)
-cap = cv2.VideoCapture(0)
+## Dual Lamp Functionality: 
+- Another lamp tracks a separate person when they enter the camera frame, based on a confidence variable.
 
-## Check if the webcam is opened successfully
-if not cap.isOpened():
-    print("Error: Could not access the webcam.")
+## Explanation of Servo Operation:
+- Servos work by receiving PWM signals, adjusting the position of the motor shaft.
+- They are DC actuators, converting electrical energy into mechanical movement.
 
-
-# 	2.	Coordinate Input from PC/Laptop:
-	•	Receive x, y coordinates from the PC or laptop interface.
-# 	3.	Servo Control Based on Coordinates:
-	•	Utilize the received coordinates to manipulate the LampBot’s servo-controlled head and body movements.
+## Conclusion:
+- The Robotic Lamp project combines robotics, computer vision, and microcontroller technology to create an interactive and engaging experience.
