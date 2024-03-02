@@ -9,6 +9,7 @@ import platform
 import sys
 import math
 from enum import Enum
+from typing import Optional
 
 class TrackingType(Enum):
     BALL = 1
@@ -42,6 +43,43 @@ class Hsv:
         self.val.low = val_low
         self.val.high = val_high
 
+class Point:
+    x: float
+    y: float
+
+    def __init__(self: 'Point', x: float, y: float):
+        self.x = x
+        self.y = y
+
+    def dist(self: 'Point', p: 'Point') -> float:
+        a = (self.x - p.x)
+        b = (self.y - p.y)
+        return math.sqrt(a ** 2 + b ** 2)
+
+    def __eq__(self, other) -> bool:
+        return self.x == other.x and self.y == other.y
+
+    def __mul__(self, value) -> 'Point':
+        return Point(self.x * value[0], self.y * value[1])
+
+class Rect:
+    tl: Point
+    br: Point
+
+    def __init__(self: 'Rect', tl: Point, br: Point):
+        self.tl = tl
+        self.br = br
+
+    def mid(self: 'Rect') -> Point:
+        return Point(self.br.x - self.tl.x, self.br.y - self.tl.y)
+
+    def __mul__(self: 'Rect', value) -> 'Rect':
+        return Rect(self.tl * value, self.br * value)
+
+    @staticmethod
+    def from_points(x1, y1, x2, y2) -> 'Rect':
+        return Rect(Point(x1, y1), Point(x2, y2))
+
 # Print to stderr
 def error(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
@@ -68,16 +106,14 @@ def new_idle_point(previous_result):
 def get_confidence(faces, index):
     return faces[0, 0, index, 2]
 
-# Returns the servo values to send to a lamp for tracking a certain face
-def servo_values_from_face(frame, faces, index, width, height):
+# Returns the servo values to send to a lamp for tracking a rectangle
+def servo_values_from_rect(frame, rect: Rect) -> tuple[int, int, int, int]:
     h, w = frame.shape[:2]
-
-    # Get the upper left and lower right coordinates of the detected face
-    box = faces[0, 0, index, 3:7] * np.array([w, h, w, h])
-    (x, y, x1, y1) = box.astype("int")
+    x, y = (rect.tl.x, rect.tl.y)
+    x1, y1 = (rect.br.x, rect.br.y)
 
     # Draw a green rectangle around the detected face
-    cv2.rectangle(frame, (x, y), (x1, y1), (0, 255, 0), 2)
+    cv2.rectangle(frame, (round(x), round(y)), (round(x1), round(y1)), (0, 255, 0), 2)
 
     # Distance in cm
     distance = (14.5 * 450) / (x1 - x)
@@ -90,7 +126,7 @@ def servo_values_from_face(frame, faces, index, width, height):
     y = y + (y1 - y) / 2 # Center y coord in box
 
     # The pixel offset from the center of the camera to the x coordinate
-    offset = x - width / 2
+    offset = x - w / 2
 
     if offset == 0:
         # If offset is zero we would get a division by zero, so special case this.
@@ -108,12 +144,14 @@ def servo_values_from_face(frame, faces, index, width, height):
     distance = max(0, distance - 120)
     return (
         angle,
-        round(y / height * 45 + 45), # Map y value to 45-90
+        round(y / h * 45 + 45), # Map y value to 45-90
         min(105, round(distance / 6) + 82), # Map z value to 82 + distance/6, with max of 105
         80, # TODO: Get w servo working nicely
     )
 
-def track_face(frame, width, height, net):
+# Returns two rectangles bounding two faces in the given frame. Returns (r1, None) if only one
+# face is detected, or (None, None) if no faces are detected.
+def track_face(frame, net, last_r1: Optional[Rect], last_r2: Optional[Rect]) -> tuple[Optional[Rect], Optional[Rect]]:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     h, w = frame.shape[:2]
@@ -121,39 +159,67 @@ def track_face(frame, width, height, net):
     net.setInput(blob)
     faces = net.forward()
 
-    # Find the 2 faces with the highest confidence
-    best = None
-    second = None
-    for i in range(faces.shape[2]):
-        confidence = get_confidence(faces, i)
-        if best is None or confidence > get_confidence(faces, best):
-            second = best
-            best = i
-        elif second is None or confidence > get_confidence(faces, second):
-            second = i
+    faces = [ f for f in faces[0, 0] if f[2] > 0.5 and f[3] < 1 and f[4] < 1 ]
 
-    if best is None or get_confidence(faces, best) < 0.5:
-        # No confidence >= 0.5
-        return None
+    if len(faces) == 0:
+        return None, None
 
-    p1 = servo_values_from_face(frame, faces, best, width, height)
+    h, w = frame.shape[:2]
 
-    # Return p1 twice if we don't have a second face
-    p2 = p1
-    if second is not None and get_confidence(faces, second) > 0.5:
+    last_p1 = last_r1.mid() if last_r1 is not None else Point(0, 0)
+    last_p2 = last_r2.mid() if last_r2 is not None else Point(0, 0)
+
+    r1: Optional[Rect] = None
+    r1_closest_dist = w * h
+
+    r2: Optional[Rect] = None
+    second_r2: Optional[Rect] = None
+    r2_closest_dist = w * h
+
+    for f in faces:
+        rect = Rect.from_points(*f[3:7]) * [w, h]
+        d1 = rect.mid().dist(last_p1)
+        d2 = rect.mid().dist(last_p2)
+        if d1 < r1_closest_dist:
+            r1 = rect
+        if d2 < r2_closest_dist:
+            second_r2 = r2
+            r2 = rect
+
+    if r1 == r2:
+        r2 = second_r2
+
+    return (r1, r2)
+
+# Given two rectangles, get the servo values for each one
+def get_servo_values(
+    frame,
+    r1: Optional[Rect],
+    r2: Optional[Rect],
+) -> tuple[Optional[tuple[int, int, int, int]], Optional[tuple[int, int, int, int]]]:
+    if r1 is None:
+        assert r2 is None
+        return None, None
+
+    v1 = servo_values_from_rect(frame, r1)
+
+    # Return v1 twice if we don't have a second face
+    v2 = v1
+    if r2 is not None:
         # We have a second face in frame
-        p2 = servo_values_from_face(frame, faces, second, width, height)
+        v2 = servo_values_from_rect(frame, r2)
 
-    # If the left lamp (p2) is trying to track a target further right than the other lamp
+    # If the left lamp (v2) is trying to track a target further right than the other lamp
     # then swap the points
-    if p2[0] > p1[0]:
-        p3 = p2
-        p2 = p1
-        p1 = p3
+    if v2[0] > v1[0]:
+        v3 = v2
+        v2 = v1
+        v1 = v3
 
-    return (p1, p2)
+    return v1, v2
 
-def track_ball(frame, width, height, hsv):
+def track_ball(frame, hsv: Hsv) -> Optional[Rect]:
+    height, width = frame.shape[:2]
     blurred = cv2.GaussianBlur(frame, (11, 11), 0)
     frame_hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
     lower_bound = np.array([ hsv.hue.low, hsv.sat.low, hsv.val.low ])
@@ -175,13 +241,7 @@ def track_ball(frame, width, height, hsv):
         # Draw a rectangle around the detected ball
         cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-        z = round(w * h / 307200 * 40) + 80
-        return (
-            x + w / 2,
-            y + h / 2,
-            z,
-            70,
-            )
+        return Rect(Point(x, y), Point(x + w, y + h))
     
     return None
 
@@ -195,7 +255,7 @@ def send_data(file, x1, y1, z1, w1, x2, y2, z2, w2):
 
     print(f"Sent: {x1},{y1},{z1},{w1}    {x2},{y2},{z2},{w2}")
 
-def open_serial():
+def open_serial() -> Optional[serial.Serial]:
     # See https://support.microbit.org/support/solutions/articles/19000035697-what-are-the-usb-vid-pid-numbers-for-micro-bit
     MICROBIT_PID = 0x0204
     MICROBIT_VID = 0x0d28
@@ -225,10 +285,11 @@ def open_serial():
 
     return serial_file
 
-def open_camera(width, height):
+def open_camera(width: int, height: int):
     if platform.system() == 'Windows':
         cam = cv2.VideoCapture(2, cv2.CAP_DSHOW)
     else:
+        # cam = cv2.VideoCapture(0)
         cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
 
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
@@ -237,35 +298,35 @@ def open_camera(width, height):
     cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     return cam
 
-def main():
-    tracking_rate = 0.1 # How often to send data to microbit in seconds
-    idle_rate = 3 # How often to send a movement when idling
-    tracking_type = TrackingType.FACE
+def main() -> None:
+    TRACKING_RATE: float = 0.1 # How often to send data to microbit in seconds
+    IDLE_RATE: float = 3 # How often to send a movement when idling
+    TRACKING_TYPE: TrackingType = TrackingType.FACE
 
-    width = 640
-    height = 480
+    WIDTH: int = 640
+    HEIGHT: int = 480
 
     ser = open_serial()
-    cam = open_camera(width, height)
+    cam = open_camera(WIDTH, HEIGHT)
 
-    hsv = Hsv(
-      hue_low = 40,
-      hue_high = 80,
-      sat_low = 40,
-      val_low = 40,
+    HSV: Hsv = Hsv(
+      hue_low = 29,
+      hue_high = 100,
+      sat_low = 45,
+      val_low = 6,
     )
 
     net = None
-    match tracking_type:
+    match TRACKING_TYPE:
         case TrackingType.BALL:
             cv2.namedWindow('tracker')
 
-            cv2.createTrackbar('Hue Low', 'tracker', 40, 179, hsv.hue.set_low)
-            cv2.createTrackbar('Hue High', 'tracker', 80, 179, hsv.hue.set_high)
-            cv2.createTrackbar('Sat Low', 'tracker', 40, 255, hsv.sat.set_low)
-            cv2.createTrackbar('Sat High', 'tracker', 255, 255, hsv.sat.set_high)
-            cv2.createTrackbar('Val Low', 'tracker', 40, 255, hsv.val.set_low)
-            cv2.createTrackbar('Val High', 'tracker', 255, 255, hsv.val.set_high)
+            cv2.createTrackbar('Hue Low', 'tracker', 40, 179, HSV.hue.set_low)
+            cv2.createTrackbar('Hue High', 'tracker', 80, 179, HSV.hue.set_high)
+            cv2.createTrackbar('Sat Low', 'tracker', 40, 255, HSV.sat.set_low)
+            cv2.createTrackbar('Sat High', 'tracker', 255, 255, HSV.sat.set_high)
+            cv2.createTrackbar('Val Low', 'tracker', 40, 255, HSV.val.set_low)
+            cv2.createTrackbar('Val High', 'tracker', 255, 255, HSV.val.set_high)
         case TrackingType.FACE:
             net = cv2.dnn.readNetFromCaffe('weights-prototxt.txt', 'res_ssd_300Dim.caffeModel')
 
@@ -277,35 +338,38 @@ def main():
     last_idle_point = None
 
     last_send_time = time.time_ns()
+    last_r1 = None
+    last_r2 = None
     while True:
         _, frame = cam.read()
 
-        point1 = None
-        point2 = None
-        match tracking_type:
+        match TRACKING_TYPE:
             case TrackingType.BALL:
-                point1 = track_ball(frame, width, height, hsv)
-                point2 = point1
+                r1 = track_ball(frame, HSV)
+                r2 = r1
             case TrackingType.FACE:
-                p = track_face(frame, width, height, net)
-                if p is not None: (point1, point2) = p
+                r1, r2 = track_face(frame, net, last_r1, last_r2)
 
-        if point1: # Tracking function returned a point
+        last_r1 = r1
+        last_r2 = r2
+        v1, v2 = get_servo_values(frame, r1, r2)
+
+        if v1 is not None and v2 is not None: # Tracking function returned a point
             now = time.time_ns()
 
             # Check if `tracking_rate` seconds have passed since `last_send_time`
-            if now - last_send_time >= 1_000_000_000 * tracking_rate:
+            if now - last_send_time >= 1_000_000_000 * TRACKING_RATE:
                 if tracking_state != TrackingState.TRACKING:
                     print("\r\nTracking object...")
                     tracking_state = TrackingState.TRACKING
 
                 last_send_time = now
-                send_data(ser, *point1, *point2)
+                send_data(ser, *v1, *v2)
         else:
             now = time.time_ns()
 
             # Check if `idle_rate` seconds have passed since `last_send_time`
-            if now - last_send_time >= 1_000_000_000 * idle_rate:
+            if now - last_send_time >= 1_000_000_000 * IDLE_RATE:
                 if tracking_state != TrackingState.IDLE:
                     print("\r\nIdling...")
                     tracking_state = TrackingState.IDLE
