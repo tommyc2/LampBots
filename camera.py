@@ -88,13 +88,13 @@ def error(*args, **kwargs):
 # and returns it.
 def new_idle_point(previous_result):
     points = [
-        ( 70, 70, 90,  70),
-        (113, 80, 95,  80),
-        (127, 90, 99,  90),
-        (135, 75, 85, 100),
-        ( 98, 75, 82,  90),
-        ( 84, 60, 90,  80),
-        ( 70, 55, 82,  70),
+        ( 70, 70, 90, 90),
+        (113, 80, 95, 90),
+        (127, 90, 99, 90),
+        (135, 75, 85, 90),
+        ( 98, 75, 82, 90),
+        ( 84, 60, 90, 90),
+        ( 70, 55, 82, 90),
     ]
 
     ret = random.choice(points)
@@ -110,7 +110,7 @@ def get_distance(width):
     return 14.5 * 450 / width
 
 # Returns the servo values to send to a lamp for tracking a rectangle
-def servo_values_from_rect(frame, rect: Rect) -> tuple[int, int, int, int]:
+def servo_values_from_rect(frame, rect: Rect, x_off: float) -> tuple[int, int, int, int]:
     h, w = frame.shape[:2]
     x, y = (rect.tl.x, rect.tl.y)
     x1, y1 = (rect.br.x, rect.br.y)
@@ -129,7 +129,7 @@ def servo_values_from_rect(frame, rect: Rect) -> tuple[int, int, int, int]:
     y = y + (y1 - y) / 2 # Center y coord in box
 
     # The pixel offset from the center of the camera to the x coordinate
-    offset = x - w / 2
+    offset = x - w / 2 - + x_off
 
     if offset == 0:
         # If offset is zero we would get a division by zero, so special case this.
@@ -147,9 +147,9 @@ def servo_values_from_rect(frame, rect: Rect) -> tuple[int, int, int, int]:
     distance = max(0, distance - 120)
     return (
         angle,
-        round(y / h * 45 + 45), # Map y value to 45-90
+        round(y / h * 65 + 50), # Map y value to 50-115
         min(105, round(distance / 6) + 82), # Map z value to 82 + distance/6, with max of 105
-        80, # TODO: Get w servo working nicely
+        90, # TODO: Get w servo working nicely
     )
 
 # Returns two rectangles bounding two faces in the given frame. Returns (r1, None) if only one
@@ -218,13 +218,14 @@ def get_servo_values(
         assert r2 is None
         return None, None
 
-    v1 = servo_values_from_rect(frame, r1)
+    # TODO: Find correct offset
+    v1 = servo_values_from_rect(frame, r1, 0)
 
     # Return v1 twice if we don't have a second face
     v2 = v1
     if r2 is not None:
         # We have a second face in frame
-        v2 = servo_values_from_rect(frame, r2)
+        v2 = servo_values_from_rect(frame, r2, 0)
 
     # If the left lamp (v2) is trying to track a target further right than the other lamp
     # then swap the points
@@ -407,3 +408,6 @@ try:
     main()
 except KeyboardInterrupt:
     pass
+
+ser = open_serial()
+send_data(ser, 90, 60, 82, 90, 90, 60, 82, 90)
