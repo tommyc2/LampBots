@@ -106,6 +106,9 @@ def new_idle_point(previous_result):
 def get_confidence(faces, index):
     return faces[0, 0, index, 2]
 
+def get_distance(width):
+    return 14.5 * 450 / width
+
 # Returns the servo values to send to a lamp for tracking a rectangle
 def servo_values_from_rect(frame, rect: Rect) -> tuple[int, int, int, int]:
     h, w = frame.shape[:2]
@@ -116,7 +119,7 @@ def servo_values_from_rect(frame, rect: Rect) -> tuple[int, int, int, int]:
     cv2.rectangle(frame, (round(x), round(y)), (round(x1), round(y1)), (0, 255, 0), 2)
 
     # Distance in cm
-    distance = (14.5 * 450) / (x1 - x)
+    distance = get_distance(x1 - x)
     pixel_dist = (x1 - x) * 450 / 14.5
 
     # TODO: Re-enable this check somehow
@@ -159,7 +162,21 @@ def track_face(frame, net, last_r1: Optional[Rect], last_r2: Optional[Rect]) -> 
     net.setInput(blob)
     faces = net.forward()
 
-    faces = [ f for f in faces[0, 0] if f[2] > 0.5 and f[3] < 1 and f[4] < 1 ]
+    new_faces = []
+    for f in faces[0, 0]:
+        if f[2] < 0.5 or f[3] >= 1 or f[4] >= 1:
+            continue
+
+        # Filter faces closer than 60cm
+        x1 = f[3] * w
+        x2 = f[5] * w
+        width = x2 - x1
+        distance = get_distance(width)
+        if distance < 60:
+            continue
+
+        new_faces.append(f)
+    faces = new_faces
 
     if len(faces) == 0:
         return None, None
