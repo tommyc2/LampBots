@@ -110,12 +110,12 @@ def new_idle_point(previous_result) -> ServoValues:
         ret = random.choice(points)
     return ret
 
-def get_distance(width) -> float:
-    return 14.5 * 450 / width
+def get_distance(face_width) -> float:
+    return 14.5 * 450 / face_width
 
-def get_pixel_dist(width: float) -> float:
-    pixels_per_cm = width / 14.5
-    return get_distance(width) * pixels_per_cm
+def get_pixel_dist(face_width: float) -> float:
+    pixels_per_cm = face_width / 14.5
+    return get_distance(face_width) * pixels_per_cm
 
 # Returns the servo values to send to a lamp for tracking a rectangle
 def servo_values_from_rect(frame, rect: Rect, x_off: float) -> ServoValues:
@@ -133,8 +133,10 @@ def servo_values_from_rect(frame, rect: Rect, x_off: float) -> ServoValues:
     x = x + (x1 - x) / 2 # Center x coord in box
     y = y + (y1 - y) / 2 # Center y coord in box
 
+    cam_center = w / 2 + x_off
+
     # The pixel offset from the center of the camera to the x coordinate
-    offset = x - w / 2 + x_off
+    offset = x - cam_center
 
     if offset == 0:
         # If offset is zero we would get a division by zero, so special case this.
@@ -152,7 +154,6 @@ def servo_values_from_rect(frame, rect: Rect, x_off: float) -> ServoValues:
     # x = 90 + diff / 4 * 3
     # w = 90 - diff / 4
     x = angle
-    w = 90
 
     # Subtract 120 from distance, with minimum of zero for calculations
     distance = max(0, distance - 120)
@@ -160,7 +161,7 @@ def servo_values_from_rect(frame, rect: Rect, x_off: float) -> ServoValues:
         round(x),
         round(y / h * 65 + 50), # Map y value to 50-115
         min(105, round(distance / 6) + 82), # Map z value to 82 + distance/6, with max of 105
-        round(w), # TODO: Get w servo working nicely
+        90, # TODO: Get w servo working nicely
     )
 
 # Returns two rectangles bounding two faces in the given frame. Returns (r1, None) if only one
@@ -183,7 +184,7 @@ def track_face(frame, net, last_r1: Optional[Rect], last_r2: Optional[Rect]) -> 
         x2 = f[5] * w
         width = x2 - x1
         distance = get_distance(width)
-        if distance < 60:
+        if distance < 60 or distance > 200:
             continue
 
         new_faces.append(f)
@@ -229,22 +230,23 @@ def get_servo_values(
         assert r2 is None
         return None, None
 
-    # TODO: Find correct offset
-    v1 = servo_values_from_rect(frame, r1, 0)
+    # Swap rectangles if the lamps would cross each other
+    if r2 is not None and r2.mid().x < r1.mid().x:
+        r3 = r2
+        r2 = r1
+        r1 = r3
+
+    pixels_per_cm = r1.width() / 14.5
+    distance_to_lamp1 = 24 * pixels_per_cm
+    distance_to_lamp2 = 24 * pixels_per_cm
+    v1 = servo_values_from_rect(frame, r1, -distance_to_lamp1)
 
     # Return v1 twice if we don't have a second face
     if r2 is not None:
         # We have a second face in frame
-        v2 = servo_values_from_rect(frame, r2, 0)
+        v2 = servo_values_from_rect(frame, r2, distance_to_lamp2)
     else:
-        v2 = servo_values_from_rect(frame, r1, 0)
-
-    # If the left lamp (v2) is trying to track a target further right than the other lamp
-    # then swap the points
-    if v2[0] > v1[0]:
-        v3 = v2
-        v2 = v1
-        v1 = v3
+        v2 = servo_values_from_rect(frame, r1, distance_to_lamp2)
 
     return v1, v2
 
@@ -257,8 +259,8 @@ def track_ball(frame, hsv: Hsv) -> Optional[Rect]:
     mask = cv2.inRange(frame_hsv, lower_bound, upper_bound)
 
     # Erode/dilate passes to remove small artifacts
-    mask = cv2.erode(mask, None, iterations=10)
-    mask = cv2.dilate(mask, None, iterations=10)
+    mask = cv2.erode(mask, None, iterations=2)
+    mask = cv2.dilate(mask, None, iterations=2)
 
     # Find contours in the mask
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -362,14 +364,14 @@ def main() -> None:
 
     # Keeps track of whether we were idling or tracking,
     # so we can print the new state to the terminal
-    tracking_state = None
+    tracking_state: Optional[TrackingState] = None
 
     # The last point returned by `new_idle_point`
-    last_idle_point = None
+    last_idle_point: Optional[Point] = None
 
-    last_send_time = time.time_ns()
-    last_r1 = None
-    last_r2 = None
+    last_send_time: int = time.time_ns()
+    last_r1: Optional[Rect] = None
+    last_r2: Optional[Rect] = None
     while True:
         _, frame = cam.read()
 
