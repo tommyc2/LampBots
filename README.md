@@ -1,5 +1,7 @@
 # Lamp Bot Project:
 
+### Note: Requires atleast Python 3.10. Use pip3 to install requirements in 'requirements.txt'
+
 - Project Iteration on a servo controlled lamp using OpenCV library & Python.
 
 ## Servo Functions:
