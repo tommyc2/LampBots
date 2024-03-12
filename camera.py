@@ -159,7 +159,6 @@ class App:
 
     def process_frame(self: App) -> Optional[Frame]:
         ret, frame = self.cam.read()
-        if not ret: return None
 
         now = time.time_ns()
 
@@ -175,16 +174,21 @@ class App:
                 cv2.rectangle(frame, tl, br, (0, 255, 0), 2)
             return frame
 
-        match self.tracking_type:
-            case TrackingType.BALL:
-                r1 = track_ball(frame, self.hsv)
-                r2 = r1
-            case TrackingType.FACE:
-                r1, r2 = track_face(frame, self.net, self.last_r1, self.last_r2)
+        if ret:
+            # Run tracking functions if we have a frame
+            match self.tracking_type:
+                case TrackingType.BALL:
+                    r1 = track_ball(frame, self.hsv)
+                    r2 = r1
+                case TrackingType.FACE:
+                    r1, r2 = track_face(frame, self.net, self.last_r1, self.last_r2)
 
-        self.last_r1 = r1
-        self.last_r2 = r2
-        v1, v2 = get_servo_values(frame, r1, r2)
+            self.last_r1 = r1
+            self.last_r2 = r2
+            v1, v2 = get_servo_values(frame, r1, r2)
+        else:
+            # Don't have a frame, idle
+            v1 = v2 = None
 
         if v1 is not None and v2 is not None: # Tracking function returned a point
             if self.tracking_state != TrackingState.TRACKING:
@@ -221,10 +225,11 @@ class App:
 
     def show_frames(self: App) -> None:
         frame = self.process_frame()
+
         if frame is not None:
             self.show_frame(frame)
 
-        self.root.after(1, App.show_frames, self)
+        self.root.after(20, App.show_frames, self)
     
     def run(self: App) -> None:
         self.show_frames()
@@ -475,10 +480,15 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
         # cam = cv2.VideoCapture(0)
         cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
 
-    cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-    cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cam.set(cv2.CAP_PROP_FPS, 10)
+    if not cam.isOpened():
+        error("Couldn't open camera")
+        # TODO: Work without open camera
+    else:
+        cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        cam.set(cv2.CAP_PROP_FPS, 10)
+
     return cam
 
 
