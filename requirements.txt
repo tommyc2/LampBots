@@ -1,19 +1,6 @@
-## Install these modules/libraries before running script ##
-
-git
-python
-pip3
 numpy
-opencv (pip3 install opencv-python)
-serial
-optional = vim
-
----  Linux commands below: ----- 
-
-sudo apt install git
-sudo apt install python3-pip
-pip3 install numpy
-pip3 install opencv-python
-pip3 install serial
-pip3 install pyserial
+opencv-python
+pyserial
+pillow
+tkinter
 
