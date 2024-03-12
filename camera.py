@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+
+# Required for forward-references
+from __future__ import annotations
+
+import tkinter as tk
+from tkinter import ttk
+from PIL import Image, ImageTk
 import numpy as np
 import cv2
 import serial
@@ -10,7 +17,9 @@ import sys
 import math
 from enum import Enum
 from typing import Optional
+import typing
 ServoValues = tuple[int, int, int, int]
+Frame = np.ndarray
 
 class TrackingType(Enum):
     BALL = 1
@@ -44,15 +53,14 @@ class Hsv:
         self.val.low = val_low
         self.val.high = val_high
 
-class Point:
+class Point(typing.NamedTuple):
     x: float
     y: float
 
-    def __init__(self: 'Point', x: float, y: float):
-        self.x = x
-        self.y = y
+    def round(self: Point) -> tuple[int, int]:
+        return round(self.x), round(self.y)
 
-    def dist(self: 'Point', p: 'Point') -> float:
+    def dist(self: Point, p: Point) -> float:
         a = (self.x - p.x)
         b = (self.y - p.y)
         return math.sqrt(a ** 2 + b ** 2)
@@ -60,32 +68,185 @@ class Point:
     def __eq__(self, other) -> bool:
         return self.x == other.x and self.y == other.y
 
-    def __mul__(self, value) -> 'Point':
+    def __mul__(self, value) -> Point:
         return Point(self.x * value[0], self.y * value[1])
 
-class Rect:
+class Rect(typing.NamedTuple):
     tl: Point
     br: Point
 
-    def __init__(self: 'Rect', tl: Point, br: Point):
-        self.tl = tl
-        self.br = br
-
-    def mid(self: 'Rect') -> Point:
+    def mid(self: Rect) -> Point:
         return Point(self.br.x - self.tl.x, self.br.y - self.tl.y)
 
-    def __mul__(self: 'Rect', value) -> 'Rect':
+    def __mul__(self: Rect, value) -> Rect:
         return Rect(self.tl * value, self.br * value)
 
-    def width(self: 'Rect') -> float:
+    def width(self: Rect) -> float:
         return self.br.x - self.tl.x
 
-    def height(self: 'Rect') -> float:
+    def height(self: Rect) -> float:
         return self.br.y - self.tl.y
 
     @staticmethod
-    def from_points(x1, y1, x2, y2) -> 'Rect':
+    def from_points(x1, y1, x2, y2) -> Rect:
         return Rect(Point(x1, y1), Point(x2, y2))
+
+# Program-wide class to keep all application state in a single place, rather than passing
+# tons of function params each time.
+class App:
+    tracking_rate: float
+    idle_rate: float
+    tracking_type: TrackingType
+
+    width: int
+    height: int
+
+    cam: cv2.VideoCapture
+    ser: Optional[serial.Serial]
+
+    hsv: Hsv
+    net = None
+
+    tracking_state: Optional[TrackingState] = None
+    last_idle_point: Optional[Point] = None
+    last_send_time: int = 0
+    last_r1: Optional[Rect] = None
+    last_r2: Optional[Rect] = None
+
+    root: tk.Tk
+    frame = None
+    label = None
+
+    def __init__(
+        self: App,
+        width: int,
+        height: int,
+        tracking_rate: float = 0.1,
+        idle_rate: float = 3,
+        initial_tracking_type: TrackingType = TrackingType.FACE,
+        hsv: Hsv = Hsv(hue_low = 29, hue_high = 100, sat_low = 45, val_low = 6),
+    ) -> None:
+        self.width = width
+        self.height = height
+        self.tracking_rate = tracking_rate
+        self.idle_rate = idle_rate
+        self.tracking_type = initial_tracking_type
+
+        self.ser = open_serial()
+        self.cam = open_camera(width, height)
+
+        self.hsv = hsv
+        self.net = cv2.dnn.readNetFromCaffe('weights-prototxt.txt', 'res_ssd_300Dim.caffeModel')
+
+        self.root = tk.Tk()
+        self.frame = ttk.Frame(self.root, padding=10)
+        self.frame.grid()
+        self.label = ttk.Label(self.frame, text="Hello World!")
+        self.label.grid(column = 0, row=0)
+
+    def __enter__(self: App) -> App:
+        return self
+
+    def __exit__(self: App, exc_type, exc_value, traceback) -> None:
+        if self.ser is not None:
+            # Reset position on exit
+            send_data(self.ser, (90, 50, 82, 90), (90, 50, 82, 90))
+
+            self.ser.close()
+
+        self.cam.release()
+        cv2.destroyAllWindows()
+
+    def process_frame(self: App) -> Optional[Frame]:
+        ret, frame = self.cam.read()
+        if not ret: return None
+
+        now = time.time_ns()
+
+        # Check if `tracking_rate` seconds have passed since `last_send_time`
+        if now - self.last_send_time < 1_000_000_000 * self.tracking_rate:
+            if self.last_r1 is not None:
+                tl = self.last_r1.tl.round()
+                br = self.last_r1.br.round()
+                cv2.rectangle(frame, tl, br, (0, 255, 0), 2)
+            if self.last_r2 is not None:
+                tl = self.last_r2.tl.round()
+                br = self.last_r2.br.round()
+                cv2.rectangle(frame, tl, br, (0, 255, 0), 2)
+            return frame
+
+        match self.tracking_type:
+            case TrackingType.BALL:
+                r1 = track_ball(frame, self.hsv)
+                r2 = r1
+            case TrackingType.FACE:
+                r1, r2 = track_face(frame, self.net, self.last_r1, self.last_r2)
+
+        self.last_r1 = r1
+        self.last_r2 = r2
+        v1, v2 = get_servo_values(frame, r1, r2)
+
+        if v1 is not None and v2 is not None: # Tracking function returned a point
+            if self.tracking_state != TrackingState.TRACKING:
+                print("\r\nTracking object...")
+                self.tracking_state = TrackingState.TRACKING
+
+            self.last_send_time = time.time_ns()
+            send_data(self.ser, v1, v2)
+        else:
+            now = time.time_ns()
+
+            # Check if `idle_rate` seconds have passed since `last_send_time`
+            if now - self.last_send_time >= 1_000_000_000 * self.idle_rate:
+                if self.tracking_state != TrackingState.IDLE:
+                    print("\r\nIdling...")
+                    self.tracking_state = TrackingState.IDLE
+
+                x, y, z, w = new_idle_point(self.last_idle_point)
+                self.last_send_time = now
+
+                # Currently sends the same point to both lamps
+                send_data(self.ser, (x, y, z, w), (x, y, z, w))
+
+        return frame
+
+    def show_frame(self: App, frame: Frame) -> None:
+        photo = cv2_frame_to_tk_image(frame)
+
+        # solution for bug in `PhotoImage`
+        self.label.photo = photo
+
+        # replace image in label
+        self.label.configure(image=photo)  
+
+    def show_frames(self: App) -> None:
+        frame = self.process_frame()
+        if frame is not None:
+            self.show_frame(frame)
+
+        self.root.after(1, App.show_frames, self)
+    
+    def run(self: App) -> None:
+        self.show_frames()
+        self.root.mainloop()
+
+def cv2_frame_to_tk_image(frame: Frame) -> ImageTk.PhotoImage:
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    im = Image.fromarray(frame)
+    return ImageTk.PhotoImage(image = im)
+
+def send_data(serial_file: Optional[serial.Serial], v1: ServoValues, v2: ServoValues) -> None:
+    x1, y1, z1, w1 = v1
+    x2, y2, z2, w2 = v2
+
+    if serial_file is not None:
+        try:
+            serial_file.write(f'{x1},{y1},{z1},{w1}\n{x2},{y2},{z2},{w2}\n'.encode())
+
+        except Exception as e:
+            error(f"Error: {e}")
+
+    print(f"Sent: {x1},{y1},{z1},{w1}    {x2},{y2},{z2},{w2}")
 
 # Print to stderr
 def error(*args, **kwargs):
@@ -184,8 +345,8 @@ def track_face(frame, net, last_r1: Optional[Rect], last_r2: Optional[Rect]) -> 
         x2 = f[5] * w
         width = x2 - x1
         distance = get_distance(width)
-        if distance < 60 or distance > 200:
-            continue
+        # if distance < 60 or distance > 200: # TODO: Re-enable
+        #     continue
 
         new_faces.append(f)
     faces = new_faces
@@ -277,16 +438,6 @@ def track_ball(frame, hsv: Hsv) -> Optional[Rect]:
     
     return None
 
-def send_data(file, x1, y1, z1, w1, x2, y2, z2, w2):
-    if file is not None:
-        try:
-            file.write(f'{x1},{y1},{z1},{w1}\n{x2},{y2},{z2},{w2}\n'.encode())
-
-        except Exception as e:
-            error(f"Error: {e}")
-
-    print(f"Sent: {x1},{y1},{z1},{w1}    {x2},{y2},{z2},{w2}")
-
 def open_serial() -> Optional[serial.Serial]:
     # See https://support.microbit.org/support/solutions/articles/19000035697-what-are-the-usb-vid-pid-numbers-for-micro-bit
     MICROBIT_PID = 0x0204
@@ -324,104 +475,15 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
         # cam = cv2.VideoCapture(0)
         cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
 
+    cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     cam.set(cv2.CAP_PROP_FPS, 10)
-    cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     return cam
 
-def main() -> None:
-    TRACKING_RATE: float = 0.1 # How often to send data to microbit in seconds
-    IDLE_RATE: float = 3 # How often to send a movement when idling
-    TRACKING_TYPE: TrackingType = TrackingType.FACE
-
-    WIDTH: int = 640
-    HEIGHT: int = 480
-
-    ser = open_serial()
-    cam = open_camera(WIDTH, HEIGHT)
-
-    HSV: Hsv = Hsv(
-      hue_low = 29,
-      hue_high = 100,
-      sat_low = 45,
-      val_low = 6,
-    )
-
-    net = None
-    match TRACKING_TYPE:
-        case TrackingType.BALL:
-            cv2.namedWindow('tracker')
-
-            cv2.createTrackbar('Hue Low', 'tracker', 40, 179, HSV.hue.set_low)
-            cv2.createTrackbar('Hue High', 'tracker', 80, 179, HSV.hue.set_high)
-            cv2.createTrackbar('Sat Low', 'tracker', 40, 255, HSV.sat.set_low)
-            cv2.createTrackbar('Sat High', 'tracker', 255, 255, HSV.sat.set_high)
-            cv2.createTrackbar('Val Low', 'tracker', 40, 255, HSV.val.set_low)
-            cv2.createTrackbar('Val High', 'tracker', 255, 255, HSV.val.set_high)
-        case TrackingType.FACE:
-            net = cv2.dnn.readNetFromCaffe('weights-prototxt.txt', 'res_ssd_300Dim.caffeModel')
-
-    # Keeps track of whether we were idling or tracking,
-    # so we can print the new state to the terminal
-    tracking_state: Optional[TrackingState] = None
-
-    # The last point returned by `new_idle_point`
-    last_idle_point: Optional[Point] = None
-
-    last_send_time: int = time.time_ns()
-    last_r1: Optional[Rect] = None
-    last_r2: Optional[Rect] = None
-    while True:
-        _, frame = cam.read()
-
-        match TRACKING_TYPE:
-            case TrackingType.BALL:
-                r1 = track_ball(frame, HSV)
-                r2 = r1
-            case TrackingType.FACE:
-                r1, r2 = track_face(frame, net, last_r1, last_r2)
-
-        last_r1 = r1
-        last_r2 = r2
-        v1, v2 = get_servo_values(frame, r1, r2)
-
-        if v1 is not None and v2 is not None: # Tracking function returned a point
-            now = time.time_ns()
-
-            # Check if `tracking_rate` seconds have passed since `last_send_time`
-            if now - last_send_time >= 1_000_000_000 * TRACKING_RATE:
-                if tracking_state != TrackingState.TRACKING:
-                    print("\r\nTracking object...")
-                    tracking_state = TrackingState.TRACKING
-
-                last_send_time = now
-                send_data(ser, *v1, *v2)
-        else:
-            now = time.time_ns()
-
-            # Check if `idle_rate` seconds have passed since `last_send_time`
-            if now - last_send_time >= 1_000_000_000 * IDLE_RATE:
-                if tracking_state != TrackingState.IDLE:
-                    print("\r\nIdling...")
-                    tracking_state = TrackingState.IDLE
-
-                x, y, z, w = new_idle_point(last_idle_point)
-                last_send_time = now
-                # Currently sends the same point to both lamps
-                send_data(ser, x, y, z, w, x, y, z, w)
-
-        cv2.imshow('camera', frame)
-        cv2.waitKey(1)
-
-    ser.close()
-    cam.release()
-    cv2.destroyAllWindows()
 
 try:
-    main()
+    with App(640, 480, initial_tracking_type = TrackingType.FACE) as app:
+        app.run()
 except KeyboardInterrupt:
     pass
-
-ser = open_serial()
-send_data(ser, 90, 50, 82, 90, 90, 50, 82, 90)
