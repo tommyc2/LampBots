@@ -1,29 +1,50 @@
 #!/usr/bin/env python3
-
 # Required for forward-references
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import ttk
-from PIL import Image, ImageTk
-import numpy as np
-import cv2
-import serial
-import serial.tools.list_ports as list_ports
 import time
 import random
 import platform
 import sys
 import math
+
 from enum import Enum
-from typing import Optional
-import typing
-ServoValues = tuple[int, int, int, int]
-Frame = np.ndarray
+from typing import Optional, NamedTuple, Callable
+import threading
+
+import tkinter as tk
+from PIL import Image, ImageTk
+import ttkbootstrap as tb #type: ignore
+from ttkbootstrap.constants import SUCCESS, DISABLED #type: ignore
+
+import numpy as np
+import cv2
+
+import serial
+import serial.tools.list_ports as list_ports
+
+CameraFrame = np.ndarray
 
 class TrackingType(Enum):
     BALL = 1
     FACE = 2
+    MANUAL = 3
+
+    def __str__(self: TrackingType) -> str:
+        match self:
+            case TrackingType.BALL: ret = 'Ball'
+            case TrackingType.FACE: ret = 'Face'
+            case TrackingType.MANUAL: ret = 'Manual'
+        return ret
+
+    @staticmethod
+    def from_str(s: str) -> TrackingType:
+        match s:
+            case 'Ball': ret = TrackingType.BALL
+            case 'Face': ret = TrackingType.FACE
+            case 'Manual': ret = TrackingType.MANUAL
+
+        return ret
 
 class TrackingState(Enum):
     IDLE = 1
@@ -53,7 +74,20 @@ class Hsv:
         self.val.low = val_low
         self.val.high = val_high
 
-class Point(typing.NamedTuple):
+class ServoValues(NamedTuple):
+    x: int
+    y: int
+    z: int
+    w: int
+
+    def bound(self: ServoValues) -> ServoValues:
+        x = min(180, max(0, self.x))
+        y = min(115, max(50, self.y))
+        z = min(105, max(82, self.z))
+        w = 90
+        return ServoValues(x, y, z, w)
+
+class Point(NamedTuple):
     x: float
     y: float
 
@@ -71,7 +105,7 @@ class Point(typing.NamedTuple):
     def __mul__(self, value) -> Point:
         return Point(self.x * value[0], self.y * value[1])
 
-class Rect(typing.NamedTuple):
+class Rect(NamedTuple):
     tl: Point
     br: Point
 
@@ -91,9 +125,100 @@ class Rect(typing.NamedTuple):
     def from_points(x1, y1, x2, y2) -> Rect:
         return Rect(Point(x1, y1), Point(x2, y2))
 
+class IntScale(tb.Scale):
+    old_value: int
+
+    def __init__(self, *args, **kwargs):
+        self.chain = kwargs.pop('command', lambda *a: None)
+        super(IntScale, self).__init__(*args, command=self._value_changed, **kwargs)
+        self.old_value = self.get()
+
+    def _value_changed(self, new_value):
+        new_value = round(float(new_value))
+        if new_value != self.old_value:
+            self.old_value = new_value
+            self.winfo_toplevel().globalsetvar(self.cget('variable'), (new_value))
+            self.chain(new_value)
+
+# Widget that contains the controls for a single lamp
+class LampControlWidget(tb.LabelFrame):
+    x_scale: IntScale
+    y_scale: IntScale
+    z_scale: IntScale
+
+    def __init__(
+        self: LampControlWidget,
+        parent,
+        name: str,
+        x_cmd: Callable, y_cmd: Callable, z_cmd: Callable,
+        x_release: Callable, y_release: Callable, z_release: Callable,
+    ) -> None:
+        super().__init__(
+            parent,
+            text = name,
+            padding = (10, 10, 10, 10),
+            bootstyle = (SUCCESS),
+        )
+
+        x_frame = tb.Frame(self)
+        x_frame.grid(row = 0, column = 0, pady = 5)
+
+        tb.Label(x_frame, text='X').grid(padx = 15)
+        self.x_scale = IntScale(
+            x_frame,
+            from_ = 0,
+            to = 180,
+            value = 90,
+            length = 300,
+            command = x_cmd,
+        )
+        self.x_scale.grid(column = 1, row = 0)
+        self.x_scale.bind('<ButtonRelease-1>', lambda ev: x_release(round(self.x_scale.get())))
+
+        y_frame = tb.Frame(self)
+        y_frame.grid(row = 1, column = 0, pady = 5)
+
+        tb.Label(y_frame, text='Y').grid(padx = 15)
+        self.y_scale = IntScale(
+            y_frame,
+            from_ = 50,
+            to = 115,
+            value = 70,
+            length = 300,
+            command = y_cmd,
+        )
+        self.y_scale.grid(column = 1, row = 0, sticky='nsew')
+        self.y_scale.bind('<ButtonRelease-1>', lambda ev: y_release(round(self.y_scale.get())))
+
+        z_frame = tb.Frame(self)
+        z_frame.grid(row = 2, column = 0, pady = 5)
+
+        tb.Label(z_frame, text='Z').grid(padx = 15)
+        self.z_scale = IntScale(
+            z_frame,
+            from_ = 82,
+            to = 105,
+            value = 82,
+            length = 300,
+            precision = None,
+            command = z_cmd,
+        )
+        self.z_scale.grid(row = 0, column = 1)
+        self.z_scale.bind('<ButtonRelease-1>', lambda ev: z_release(round(self.z_scale.get())))
+
+    def disable_scales(self: LampControlWidget) -> None:
+        for scale in [self.x_scale, self.y_scale, self.z_scale]:
+            scale.configure(state = DISABLED)
+
+    def enable_scales(self: LampControlWidget) -> None:
+        for scale in [self.x_scale, self.y_scale, self.z_scale]:
+            scale.configure(state = '')
+
 # Program-wide class to keep all application state in a single place, rather than passing
 # tons of function params each time.
 class App:
+    SERVO_REST: ServoValues = ServoValues(90, 50, 82, 90)
+
     tracking_rate: float
     idle_rate: float
     tracking_type: TrackingType
@@ -108,14 +233,20 @@ class App:
     net = None
 
     tracking_state: Optional[TrackingState] = None
-    last_idle_point: Optional[Point] = None
+    last_idle_point: Optional[ServoValues] = None
     last_send_time: int = 0
     last_r1: Optional[Rect] = None
     last_r2: Optional[Rect] = None
+    last_v1: ServoValues = SERVO_REST
+    last_v2: ServoValues = SERVO_REST
 
-    root: tk.Tk
-    frame = None
-    label = None
+    frame: CameraFrame
+
+    root: tb.Window
+    cam_label: tb.Label
+
+    lamp1: LampControlWidget
+    lamp2: LampControlWidget
 
     def __init__(
         self: App,
@@ -137,12 +268,7 @@ class App:
 
         self.hsv = hsv
         self.net = cv2.dnn.readNetFromCaffe('weights-prototxt.txt', 'res_ssd_300Dim.caffeModel')
-
-        self.root = tk.Tk()
-        self.frame = ttk.Frame(self.root, padding=10)
-        self.frame.grid()
-        self.label = ttk.Label(self.frame, text="Hello World!")
-        self.label.grid(column = 0, row=0)
+        self.init_ui()
 
     def __enter__(self: App) -> App:
         return self
@@ -150,14 +276,150 @@ class App:
     def __exit__(self: App, exc_type, exc_value, traceback) -> None:
         if self.ser is not None:
             # Reset position on exit
-            send_data(self.ser, (90, 50, 82, 90), (90, 50, 82, 90))
-
+            self.send_data(App.SERVO_REST, App.SERVO_REST)
             self.ser.close()
 
         self.cam.release()
         cv2.destroyAllWindows()
 
-    def process_frame(self: App) -> Optional[Frame]:
+    def init_ui(self: App) -> None:
+        self.root = tb.Window(themename = 'darkly')
+        self.root.title('Lamp Control Centre')
+        self.root.rowconfigure(0, weight = 1)
+        self.root.columnconfigure(0, weight = 1)
+
+        frame = tb.Frame(self.root, padding = (20, 20, 20, 20))
+        frame.grid(row = 0, column = 0, sticky = 'nsew')
+        
+        cam_frame = tb.Frame(frame, width = 640, height = 480, border=2, bootstyle = SUCCESS)
+        cam_frame.grid(row = 10, column = 10, sticky = 'nw')
+        cam_frame.grid_propagate(False)
+
+        cam_frame.grid_columnconfigure(0, weight = 1)
+        cam_frame.grid_rowconfigure(0, weight = 1)
+
+        cam_label = tb.Label(cam_frame, text='No camera detected')
+        cam_label.grid(sticky = 'nsew')
+        cam_label.configure(anchor = 'center')
+        self.cam_label = cam_label
+
+        lamp_frame = tb.Frame(frame)
+        lamp_frame.grid(row = 10, column = 20, sticky = 'nw')
+
+        input_picker = tb.Combobox(lamp_frame)
+        input_picker['values'] = (TrackingType.BALL, TrackingType.FACE, TrackingType.MANUAL)
+        input_picker.state(['readonly'])
+        input_picker.set(TrackingType.MANUAL)
+        input_picker.bind(
+            '<<ComboboxSelected>>',
+            lambda ev: self.set_tracking_type(TrackingType.from_str(input_picker.get()))
+        )
+        input_picker.grid(row = 0, column = 0, columnspan = 2)
+
+        self.lamp1 = LampControlWidget(
+            lamp_frame,
+            'Lamp 1',
+            lambda x: self.limited_move(x1 = x),
+            lambda y: self.limited_move(y1 = y),
+            lambda z: self.limited_move(z1 = z),
+            lambda x: self.move(x1 = x),
+            lambda y: self.move(y1 = y),
+            lambda z: self.move(z1 = z),
+        )
+        self.lamp2 = LampControlWidget(
+            lamp_frame,
+            'Lamp 2',
+            lambda x: self.limited_move(x2 = x),
+            lambda y: self.limited_move(y2 = y),
+            lambda z: self.limited_move(z2 = z),
+            lambda x: self.move(x2 = x),
+            lambda y: self.move(y2 = y),
+            lambda z: self.move(z2 = z),
+        )
+        self.lamp1.grid(row = 1, column = 0, padx = 20)
+        self.lamp2.grid(row = 1, column = 1, padx = 20, pady = 10)
+
+    def set_tracking_type(self: App, tracking_type: TrackingType) -> None:
+        if self.tracking_type == tracking_type: return
+
+        if tracking_type == TrackingType.MANUAL:
+            self.lamp1.enable_scales()
+            self.lamp2.enable_scales()
+            self.lamp1.x_scale.set(self.last_v1.x)
+            self.lamp1.y_scale.set(self.last_v1.y)
+            self.lamp1.z_scale.set(self.last_v1.z)
+            self.lamp2.x_scale.set(self.last_v2.x)
+            self.lamp2.y_scale.set(self.last_v2.y)
+            self.lamp2.z_scale.set(self.last_v2.z)
+            self.last_r1 = None
+            self.last_r2 = None
+        else:
+            self.lamp1.disable_scales()
+            self.lamp2.disable_scales()
+               
+        self.tracking_type = tracking_type
+
+    # Same as `move`, but only sends data if it has been at least `self.tracking_rate` seconds
+    # since the previous send. Used for sliders so they don't send data too fast.
+    def limited_move(
+        self: App,
+        x1: Optional[int] = None,
+        y1: Optional[int] = None,
+        z1: Optional[int] = None,
+        w1: Optional[int] = None,
+        x2: Optional[int] = None,
+        y2: Optional[int] = None,
+        z2: Optional[int] = None,
+        w2: Optional[int] = None,
+    ) -> None:
+        now = time.time_ns()
+        if now - self.last_send_time >= 1_000_000_000 * self.tracking_rate:
+            self.last_send_time = now
+            self.move(x1, y1, z1, w1, x2, y2, z2, w2)
+
+    # Moves the lamps, allowing for setting one or many servo values. Values set to `None`
+    # will remain in the same position.
+    def move(
+        self: App,
+        x1: Optional[int] = None,
+        y1: Optional[int] = None,
+        z1: Optional[int] = None,
+        w1: Optional[int] = None,
+        x2: Optional[int] = None,
+        y2: Optional[int] = None,
+        z2: Optional[int] = None,
+        w2: Optional[int] = None,
+    ) -> None:
+        new_v1 = ServoValues(
+            self.last_v1.x if x1 is None else x1,
+            self.last_v1.y if y1 is None else y1,
+            self.last_v1.z if z1 is None else z1,
+            self.last_v1.w if w1 is None else w1,
+        )
+        new_v2 = ServoValues(
+            self.last_v2.x if x2 is None else x2,
+            self.last_v2.y if y2 is None else y2,
+            self.last_v2.z if z2 is None else z2,
+            self.last_v2.w if w2 is None else w2,
+        )
+
+        self.send_data(new_v1, new_v2)
+
+    def send_data(self: App, v1: ServoValues, v2: ServoValues) -> None:
+        if self.ser is not None:
+            try:
+                self.ser.write(f'{v1.x},{v1.y},{v1.z},{v1.w}\n{v2.x},{v2.y},{v2.z},{v2.w}\n'.encode())
+
+            except Exception as e:
+                error(f"Error: {e}")
+                return
+
+        self.last_v1 = v1
+        self.last_v2 = v2
+
+        print(f"Sent: {v1.x},{v1.y},{v1.z},{v1.w}    {v2.x},{v2.y},{v2.z},{v2.w}")
+
+    def process_frame(self: App) -> Optional[CameraFrame]:
         ret, frame = self.cam.read()
 
         now = time.time_ns()
@@ -182,10 +444,17 @@ class App:
                     r2 = r1
                 case TrackingType.FACE:
                     r1, r2 = track_face(frame, self.net, self.last_r1, self.last_r2)
+                case TrackingType.MANUAL:
+                    # Don't do any automatic tracking here
+                    return frame
+                case _:
+                    assert False
 
             self.last_r1 = r1
             self.last_r2 = r2
             v1, v2 = get_servo_values(frame, r1, r2)
+        elif self.tracking_type == TrackingType.MANUAL:
+            return None
         else:
             # Don't have a frame, idle
             v1 = v2 = None
@@ -196,7 +465,7 @@ class App:
                 self.tracking_state = TrackingState.TRACKING
 
             self.last_send_time = time.time_ns()
-            send_data(self.ser, v1, v2)
+            self.send_data(v1, v2)
         else:
             now = time.time_ns()
 
@@ -206,52 +475,47 @@ class App:
                     print("\r\nIdling...")
                     self.tracking_state = TrackingState.IDLE
 
-                x, y, z, w = new_idle_point(self.last_idle_point)
+                x, y, z, w = new_idle_value(self.last_idle_point)
                 self.last_send_time = now
 
                 # Currently sends the same point to both lamps
-                send_data(self.ser, (x, y, z, w), (x, y, z, w))
+                self.send_data(ServoValues(x, y, z, w), ServoValues(x, y, z, w))
 
         return frame
 
-    def show_frame(self: App, frame: Frame) -> None:
-        photo = cv2_frame_to_tk_image(frame)
-
-        # solution for bug in `PhotoImage`
-        self.label.photo = photo
-
-        # replace image in label
-        self.label.configure(image=photo)  
-
-    def show_frames(self: App) -> None:
-        frame = self.process_frame()
-
-        if frame is not None:
-            self.show_frame(frame)
-
-        self.root.after(20, App.show_frames, self)
+    def show_frame(self: App) -> None:
+        photo = cv2_frame_to_tk_image(self.frame)
+        self.cam_label.photo = photo
+        self.cam_label.configure(image = photo, text = '')  
     
     def run(self: App) -> None:
-        self.show_frames()
+        self.root.bind('<<camera_frame>>', lambda ev: self.show_frame())
+
+        thread = threading.Thread(target = self.run_camera)
+        thread.daemon = True
+        thread.start()
+
         self.root.mainloop()
 
-def cv2_frame_to_tk_image(frame: Frame) -> ImageTk.PhotoImage:
+        thread.join()
+
+    # Run in a separate thread to avoid blocking tkinters event loop.
+    def run_camera(self: App) -> None:
+        while True:
+            # No race condition because of GIL
+            frame = self.process_frame()
+            if frame is None: continue
+            self.frame = frame
+
+            try:
+                self.root.event_generate('<<camera_frame>>', when='tail')
+            except RuntimeError:
+                return
+
+def cv2_frame_to_tk_image(frame: CameraFrame) -> ImageTk.PhotoImage:
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     im = Image.fromarray(frame)
     return ImageTk.PhotoImage(image = im)
-
-def send_data(serial_file: Optional[serial.Serial], v1: ServoValues, v2: ServoValues) -> None:
-    x1, y1, z1, w1 = v1
-    x2, y2, z2, w2 = v2
-
-    if serial_file is not None:
-        try:
-            serial_file.write(f'{x1},{y1},{z1},{w1}\n{x2},{y2},{z2},{w2}\n'.encode())
-
-        except Exception as e:
-            error(f"Error: {e}")
-
-    print(f"Sent: {x1},{y1},{z1},{w1}    {x2},{y2},{z2},{w2}")
 
 # Print to stderr
 def error(*args, **kwargs):
@@ -259,21 +523,21 @@ def error(*args, **kwargs):
 
 # Selects a random point from a predefined list of points until it is not `previous_result`,
 # and returns it.
-def new_idle_point(previous_result) -> ServoValues:
-    points = [
-        ( 70, 70, 90, 90),
-        (113, 80, 95, 90),
-        (127, 90, 99, 90),
-        (135, 75, 85, 90),
-        ( 98, 75, 82, 90),
-        ( 84, 60, 90, 90),
-        ( 70, 55, 82, 90),
+def new_idle_value(previous_value: Optional[ServoValues]) -> ServoValues:
+    values = [
+        ServoValues( 70, 70, 90, 90),
+        ServoValues(113, 80, 95, 90),
+        ServoValues(127, 90, 99, 90),
+        ServoValues(135, 75, 85, 90),
+        ServoValues( 98, 75, 82, 90),
+        ServoValues( 84, 60, 90, 90),
+        ServoValues( 70, 55, 82, 90),
     ]
 
-    ret = random.choice(points)
+    ret = random.choice(values)
     # Keep picking until the result is not the same as the previous one
-    while ret == previous_result:
-        ret = random.choice(points)
+    while ret == previous_value:
+        ret = random.choice(values)
     return ret
 
 def get_distance(face_width) -> float:
@@ -323,7 +587,7 @@ def servo_values_from_rect(frame, rect: Rect, x_off: float) -> ServoValues:
 
     # Subtract 120 from distance, with minimum of zero for calculations
     distance = max(0, distance - 120)
-    return (
+    return ServoValues(
         round(x),
         round(y / h * 65 + 50), # Map y value to 50-115
         min(105, round(distance / 6) + 82), # Map z value to 82 + distance/6, with max of 105
@@ -416,7 +680,7 @@ def get_servo_values(
 
     return v1, v2
 
-def track_ball(frame, hsv: Hsv) -> Optional[Rect]:
+def track_ball(frame: CameraFrame, hsv: Hsv) -> Optional[Rect]:
     height, width = frame.shape[:2]
     blurred = cv2.GaussianBlur(frame, (11, 11), 0)
     frame_hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
@@ -425,8 +689,9 @@ def track_ball(frame, hsv: Hsv) -> Optional[Rect]:
     mask = cv2.inRange(frame_hsv, lower_bound, upper_bound)
 
     # Erode/dilate passes to remove small artifacts
-    mask = cv2.erode(mask, None, iterations=2)
-    mask = cv2.dilate(mask, None, iterations=2)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
+    mask = cv2.erode(mask, kernel, iterations=2)
+    mask = cv2.dilate(mask, kernel, iterations=2)
 
     # Find contours in the mask
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -484,7 +749,7 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
         error("Couldn't open camera")
         # TODO: Work without open camera
     else:
-        cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG')) #type: ignore
         cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         cam.set(cv2.CAP_PROP_FPS, 10)
@@ -493,7 +758,7 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
 
 
 try:
-    with App(640, 480, initial_tracking_type = TrackingType.FACE) as app:
+    with App(640, 480, initial_tracking_type = TrackingType.MANUAL) as app:
         app.run()
 except KeyboardInterrupt:
     pass

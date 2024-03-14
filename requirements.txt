@@ -3,4 +3,4 @@ opencv-python
 pyserial
 pillow
 tkinter
-
+ttkbootstrap
