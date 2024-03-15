@@ -22,6 +22,7 @@ import cv2
 
 import serial
 import serial.tools.list_ports as list_ports
+from face_detection.detector import Detector
 
 CameraFrame = np.ndarray
 
@@ -230,7 +231,6 @@ class App:
     ser: Optional[serial.Serial]
 
     hsv: Hsv
-    net = None
 
     tracking_state: Optional[TrackingState] = None
     last_idle_point: Optional[ServoValues] = None
@@ -247,6 +247,8 @@ class App:
 
     lamp1: LampControlWidget
     lamp2: LampControlWidget
+
+    detector: Detector
 
     def __init__(
         self: App,
@@ -265,9 +267,9 @@ class App:
 
         self.ser = open_serial()
         self.cam = open_camera(width, height)
+        self.detector = Detector()
 
         self.hsv = hsv
-        self.net = cv2.dnn.readNetFromCaffe('weights-prototxt.txt', 'res_ssd_300Dim.caffeModel')
         self.init_ui()
 
     def __enter__(self: App) -> App:
@@ -443,7 +445,7 @@ class App:
                     r1 = track_ball(frame, self.hsv)
                     r2 = r1
                 case TrackingType.FACE:
-                    r1, r2 = track_face(frame, self.net, self.last_r1, self.last_r2)
+                    r1, r2 = self.track_face(frame)
                 case TrackingType.MANUAL:
                     # Don't do any automatic tracking here
                     return frame
@@ -511,6 +513,43 @@ class App:
                 self.root.event_generate('<<camera_frame>>', when='tail')
             except RuntimeError:
                 return
+
+    # Returns two rectangles bounding two faces in the given frame. Returns (r1, None) if only one
+    # face is detected, or (None, None) if no faces are detected.
+    def track_face(self: App, frame) -> tuple[Optional[Rect], Optional[Rect]]:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        bboxes = self.detector.detect(frame)
+
+        if len(bboxes) == 0:
+            return None, None
+
+        h, w = frame.shape[:2]
+
+        last_p1 = self.last_r1.mid() if self.last_r1 is not None else Point(0, 0)
+        last_p2 = self.last_r2.mid() if self.last_r2 is not None else Point(0, 0)
+
+        r1: Optional[Rect] = None
+        r1_closest_dist = w * h
+
+        r2: Optional[Rect] = None
+        second_r2: Optional[Rect] = None
+        r2_closest_dist = w * h
+
+        for bbox in bboxes:
+            x1, y1, x2, y2, _ = bbox
+            rect = Rect.from_points(x1, y1, x2, y2)
+            d1 = rect.mid().dist(last_p1)
+            d2 = rect.mid().dist(last_p2)
+            if d1 < r1_closest_dist:
+                r1 = rect
+            if d2 < r2_closest_dist:
+                second_r2 = r2
+                r2 = rect
+
+        if r1 == r2:
+            r2 = second_r2
+
+        return r1, r2
 
 def cv2_frame_to_tk_image(frame: CameraFrame) -> ImageTk.PhotoImage:
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -593,62 +632,6 @@ def servo_values_from_rect(frame, rect: Rect, x_off: float) -> ServoValues:
         min(105, round(distance / 6) + 82), # Map z value to 82 + distance/6, with max of 105
         90, # TODO: Get w servo working nicely
     )
-
-# Returns two rectangles bounding two faces in the given frame. Returns (r1, None) if only one
-# face is detected, or (None, None) if no faces are detected.
-def track_face(frame, net, last_r1: Optional[Rect], last_r2: Optional[Rect]) -> tuple[Optional[Rect], Optional[Rect]]:
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    h, w = frame.shape[:2]
-    blob = cv2.dnn.blobFromImage(frame)
-    net.setInput(blob)
-    faces = net.forward()
-
-    new_faces = []
-    for f in faces[0, 0]:
-        if f[2] < 0.5 or f[3] >= 1 or f[4] >= 1:
-            continue
-
-        # Filter faces closer than 60cm
-        x1 = f[3] * w
-        x2 = f[5] * w
-        width = x2 - x1
-        distance = get_distance(width)
-        # if distance < 60 or distance > 200: # TODO: Re-enable
-        #     continue
-
-        new_faces.append(f)
-    faces = new_faces
-
-    if len(faces) == 0:
-        return None, None
-
-    h, w = frame.shape[:2]
-
-    last_p1 = last_r1.mid() if last_r1 is not None else Point(0, 0)
-    last_p2 = last_r2.mid() if last_r2 is not None else Point(0, 0)
-
-    r1: Optional[Rect] = None
-    r1_closest_dist = w * h
-
-    r2: Optional[Rect] = None
-    second_r2: Optional[Rect] = None
-    r2_closest_dist = w * h
-
-    for f in faces:
-        rect = Rect.from_points(*f[3:7]) * [w, h]
-        d1 = rect.mid().dist(last_p1)
-        d2 = rect.mid().dist(last_p2)
-        if d1 < r1_closest_dist:
-            r1 = rect
-        if d2 < r2_closest_dist:
-            second_r2 = r2
-            r2 = rect
-
-    if r1 == r2:
-        r2 = second_r2
-
-    return (r1, r2)
 
 # Given two rectangles, get the servo values for each one
 def get_servo_values(
@@ -742,8 +725,8 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
     if platform.system() == 'Windows':
         cam = cv2.VideoCapture(2, cv2.CAP_DSHOW)
     else:
-        # cam = cv2.VideoCapture(0)
-        cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
+        cam = cv2.VideoCapture(0)
+        # cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
 
     if not cam.isOpened():
         error("Couldn't open camera")

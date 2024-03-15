@@ -4,3 +4,6 @@ pyserial
 pillow
 tkinter
 ttkbootstrap
+torch
+torchvision
+pyyaml
