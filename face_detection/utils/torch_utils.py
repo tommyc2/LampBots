@@ -9,7 +9,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision
+import torchvision #type: ignore
 
 def initialize_weights(model):
     for m in model.modules():

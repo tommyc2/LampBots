@@ -4,7 +4,7 @@ import time
 import cv2
 import numpy as np
 import torch
-import torchvision
+import torchvision #type: ignore
 
 from face_detection.models.yolo import Model
 
