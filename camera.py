@@ -209,70 +209,17 @@ class LampControlWidget(tb.LabelFrame):
         for scale in [self.x_scale, self.y_scale, self.z_scale]:
             scale.configure(state = '')
 
-# Program-wide class to keep all application state in a single place, rather than passing
-# tons of function params each time.
-class App:
-    SERVO_REST: ServoValues = ServoValues(90, 50, 82, 90)
-    tracker: Tracker
-    pipe: Connection
-    running: Any
-
-    tracking_state: Optional[TrackingState] = None
-    tracking_rate: float
-    idle_rate: float
-
-    ser: Optional[Serial]
-
-    last_idle_point: Optional[ServoValues] = None
-    last_send_time: int = 0
-    last_v1: ServoValues = SERVO_REST
-    last_v2: ServoValues = SERVO_REST
-
-    frame: CameraFrame
-
+class Gui:
     root: tb.Window
     cam_label: tb.Label
 
     lamp1: LampControlWidget
     lamp2: LampControlWidget
 
-    def __init__(
-        self: App,
-        width: int,
-        height: int,
-        tracking_rate: float = 0.1,
-        idle_rate: float = 3,
-        hsv: Hsv = Hsv(hue_low = 29, hue_high = 100, sat_low = 45, val_low = 6),
-    ) -> None:
-        self.pipe, tracker_pipe = mp.Pipe()
-        self.running = mp.Value(ctypes.c_bool, True)
-        self.tracker = Tracker(
-            tracker_pipe,
-            width,
-            height,
-            self.running,
-            hsv = hsv,
-            tracking_rate = tracking_rate,
-        )
+    app: App
 
-        self.idle_rate = idle_rate
-
-        self.ser = open_serial()
-
-        self.init_ui()
-
-    def __enter__(self: App) -> App:
-        return self
-
-    def __exit__(self: App, exc_type, exc_value, traceback) -> None:
-        if self.ser is not None:
-            # Reset position on exit
-            self.send_data(App.SERVO_REST, App.SERVO_REST)
-            self.ser.close()
-
-        cv2.destroyAllWindows()
-
-    def init_ui(self: App) -> None:
+    def __init__(self: Gui, app: App) -> None:
+        self.app = app
         self.root = tb.Window(themename = 'darkly')
         self.root.title('Lamp Control Centre')
         self.root.rowconfigure(0, weight = 1)
@@ -302,49 +249,120 @@ class App:
         input_picker.set(TrackingType.NONE)
         input_picker.bind(
             '<<ComboboxSelected>>',
-            lambda ev: self.set_tracking_type(TrackingType.from_str(input_picker.get()))
+            lambda ev: self.app.set_tracking_type(TrackingType.from_str(input_picker.get()))
         )
         input_picker.grid(row = 0, column = 0, columnspan = 2)
 
         self.lamp1 = LampControlWidget(
             lamp_frame,
             'Lamp 1',
-            lambda x: self.limited_move(x1 = x),
-            lambda y: self.limited_move(y1 = y),
-            lambda z: self.limited_move(z1 = z),
-            lambda x: self.move(x1 = x),
-            lambda y: self.move(y1 = y),
-            lambda z: self.move(z1 = z),
+            lambda x: self.app.limited_move(x1 = x),
+            lambda y: self.app.limited_move(y1 = y),
+            lambda z: self.app.limited_move(z1 = z),
+            lambda x: self.app.move(x1 = x),
+            lambda y: self.app.move(y1 = y),
+            lambda z: self.app.move(z1 = z),
         )
         self.lamp2 = LampControlWidget(
             lamp_frame,
             'Lamp 2',
-            lambda x: self.limited_move(x2 = x),
-            lambda y: self.limited_move(y2 = y),
-            lambda z: self.limited_move(z2 = z),
-            lambda x: self.move(x2 = x),
-            lambda y: self.move(y2 = y),
-            lambda z: self.move(z2 = z),
+            lambda x: self.app.limited_move(x2 = x),
+            lambda y: self.app.limited_move(y2 = y),
+            lambda z: self.app.limited_move(z2 = z),
+            lambda x: self.app.move(x2 = x),
+            lambda y: self.app.move(y2 = y),
+            lambda z: self.app.move(z2 = z),
         )
+
         self.lamp1.grid(row = 1, column = 0, padx = 20)
         self.lamp2.grid(row = 1, column = 1, padx = 20, pady = 10)
 
-    # Update the tracking type for the Tracker process
-    def set_tracking_type(self: App, tracking_type: TrackingType) -> None:
-        if tracking_type == TrackingType.NONE:
+        self.root.bind('<<camera_frame>>', lambda _: self.show_frame())
+
+    def set_tracking_type(self: Gui, tracking_type: TrackingType) -> None:
+        if tracking_type == tracking_type.NONE:
             self.lamp1.enable_scales()
             self.lamp2.enable_scales()
-            self.lamp1.x_scale.set(self.last_v1.x)
-            self.lamp1.y_scale.set(self.last_v1.y)
-            self.lamp1.z_scale.set(self.last_v1.z)
-            self.lamp2.x_scale.set(self.last_v2.x)
-            self.lamp2.y_scale.set(self.last_v2.y)
-            self.lamp2.z_scale.set(self.last_v2.z)
+            self.lamp1.x_scale.set(self.app.last_v1.x)
+            self.lamp1.y_scale.set(self.app.last_v1.y)
+            self.lamp1.z_scale.set(self.app.last_v1.z)
+            self.lamp2.x_scale.set(self.app.last_v2.x)
+            self.lamp2.y_scale.set(self.app.last_v2.y)
+            self.lamp2.z_scale.set(self.app.last_v2.z)
         else:
             self.lamp1.disable_scales()
             self.lamp2.disable_scales()
-               
+
+    def set_frame(self: Gui, frame: CameraFrame) -> None:
+        self.frame = frame
+        self.root.event_generate('<<camera_frame>>')
+
+    def show_frame(self: Gui) -> None:
+        frame = cv2.resize(self.frame, (640, 360))
+        photo = cv2_frame_to_tk_image(frame)
+        self.cam_label.photo = photo # type: ignore
+        self.cam_label.configure(image = photo, text = '')  
+
+    def mainloop(self: Gui) -> None:
+        self.root.mainloop()
+
+# Program-wide class to keep all application state in a single place, rather than passing
+# tons of function params each time.
+class App:
+    SERVO_REST: ServoValues = ServoValues(90, 50, 82, 90)
+    tracker: Tracker
+    pipe: Connection
+    running: Any
+
+    tracking_state: Optional[TrackingState] = None
+    tracking_rate: float
+    idle_rate: float
+
+    ser: Optional[Serial]
+
+    last_idle_point: Optional[ServoValues] = None
+    last_send_time: int = 0
+    last_v1: ServoValues = SERVO_REST
+    last_v2: ServoValues = SERVO_REST
+
+    gui: Gui
+
+    def __init__(
+        self: App,
+        width: int,
+        height: int,
+        tracking_rate: float = 0.1,
+        idle_rate: float = 3,
+        hsv: Hsv = Hsv(hue_low = 29, hue_high = 100, sat_low = 45, val_low = 6),
+    ) -> None:
+        self.idle_rate = idle_rate
+        self.pipe, tracker_pipe = mp.Pipe()
+        self.running = mp.Value(ctypes.c_bool, True)
+        self.tracker = Tracker(
+            tracker_pipe,
+            width,
+            height,
+            self.running,
+            hsv = hsv,
+            tracking_rate = tracking_rate,
+        )
+
+        self.ser = open_serial()
+        self.gui = Gui(self)
+
+    def __enter__(self: App) -> App:
+        return self
+
+    def __exit__(self: App, exc_type, exc_value, traceback) -> None:
+        if self.ser is not None:
+            # Reset position on exit
+            self.send_data(App.SERVO_REST, App.SERVO_REST)
+            self.ser.close()
+
+    # Update the tracking type for the Tracker process
+    def set_tracking_type(self: App, tracking_type: TrackingType) -> None:
         self.pipe.send(tracking_type)
+        self.gui.set_tracking_type(tracking_type)
 
     # Same as `move`, but only sends data if it has been at least 100 miliseconds
     # since the previous send. Used for sliders so they don't send data too fast.
@@ -433,9 +451,8 @@ class App:
         # Generate event to display frame.
         # tkinter calls must be made from the main thread, so we need to generate an event rather
         # than doing it directly
-        self.frame = frame
         try:
-            self.root.event_generate('<<camera_frame>>')
+            self.gui.set_frame(frame)
         except RuntimeError:
             return
 
@@ -461,16 +478,8 @@ class App:
 
                 self.last_send_time = time.time_ns()
                 self.send_data(v1, v2)
-
-    def show_frame(self: App) -> None:
-        frame = cv2.resize(self.frame, (640, 360))
-        photo = cv2_frame_to_tk_image(frame)
-        self.cam_label.photo = photo # type: ignore
-        self.cam_label.configure(image = photo, text = '')  
     
     def run(self: App) -> None:
-        self.root.bind('<<camera_frame>>', lambda _: self.show_frame())
-
         self.tracker.start()
 
         thread = threading.Thread(target = self.run_camera)
@@ -478,7 +487,7 @@ class App:
         thread.start()
 
         try:
-            self.root.mainloop()
+            self.gui.mainloop()
         except KeyboardInterrupt:
             pass
         finally:
