@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Required for forward references
 from __future__ import annotations
-from typing import Optional, NamedTuple, Callable, assert_never, Any
+from typing import Optional, NamedTuple, Callable, Any
 from enum import Enum
 
 import time

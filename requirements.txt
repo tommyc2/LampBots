@@ -2,7 +2,6 @@ numpy
 opencv-python
 pyserial
 pillow
-tkinter
 ttkbootstrap
 torch
 torchvision
