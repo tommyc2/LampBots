@@ -2,6 +2,9 @@
 
 Project iteration on a servo controlled lamp using Python and OpenCV.
 
+# Note:
+To minimise/avoid any issues, please run this in a **Linux Environment** either using a VM or dual-boot etc. Popular examples include Ubuntu, Linux Mint etc.
+
 # Usage
 
 Requires at least Python 3.10.
