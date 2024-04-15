@@ -11,6 +11,7 @@ import sys
 import math
 
 import threading
+from threading import Lock
 import multiprocessing as mp
 from multiprocessing.connection import Connection
 from multiprocessing.synchronize import Condition
@@ -18,7 +19,7 @@ import ctypes
 
 from PIL import Image, ImageTk
 import ttkbootstrap as tb
-from ttkbootstrap.constants import SUCCESS, DISABLED
+from ttkbootstrap.constants import SUCCESS, DISABLED, INFO
 
 import numpy as np
 import cv2
@@ -145,6 +146,7 @@ class LampControlWidget(tb.LabelFrame):
         self: LampControlWidget,
         parent,
         name: str,
+        slider_width: int,
         x_cmd: Callable, y_cmd: Callable, z_cmd: Callable,
         x_release: Callable, y_release: Callable, z_release: Callable,
     ) -> None:
@@ -152,7 +154,7 @@ class LampControlWidget(tb.LabelFrame):
             parent,
             text = name,
             padding = (10, 10, 10, 10),
-            bootstyle = (SUCCESS), #type: ignore
+            bootstyle = SUCCESS, #type: ignore
         )
 
         x_frame = tb.Frame(self)
@@ -164,7 +166,7 @@ class LampControlWidget(tb.LabelFrame):
             from_ = 0,
             to = 180,
             value = 90,
-            length = 300,
+            length = slider_width,
             command = x_cmd,
         )
         self.x_scale.grid(column = 1, row = 0)
@@ -179,10 +181,10 @@ class LampControlWidget(tb.LabelFrame):
             from_ = 50,
             to = 115,
             value = 70,
-            length = 300,
+            length = slider_width,
             command = y_cmd,
         )
-        self.y_scale.grid(column = 1, row = 0, sticky='nsew')
+        self.y_scale.grid(column = 1, row = 0)
         self.y_scale.bind('<ButtonRelease-1>', lambda ev: y_release(round(self.y_scale.get())))
 
         z_frame = tb.Frame(self)
@@ -194,7 +196,7 @@ class LampControlWidget(tb.LabelFrame):
             from_ = 82,
             to = 105,
             value = 82,
-            length = 300,
+            length = slider_width,
             precision = None,
             command = z_cmd,
         )
@@ -209,14 +211,45 @@ class LampControlWidget(tb.LabelFrame):
         for scale in [self.x_scale, self.y_scale, self.z_scale]:
             scale.configure(state = '')
 
+    def resize_scales(self: LampControlWidget, width: int) -> None:
+        self.x_scale.configure(length = width)
+        self.y_scale.configure(length = width)
+        self.z_scale.configure(length = width)
+
 class Gui:
     root: tb.Window
+    cam_frame: tb.Frame
     cam_label: tb.Label
 
+    # Sending a tkinter event after window close will block indefinitely, so we need to make sure
+    # we don't do that
+    event_lock: Lock = Lock()
+
+    closed: bool = False
+
+    lamp_frame: tb.Frame
     lamp1: LampControlWidget
     lamp2: LampControlWidget
 
+    prev_width: int = 0
+
     app: App
+
+    def on_close(self: Gui) -> None:
+        with self.event_lock:
+            self.closed = True
+            self.root.destroy()
+        print('Closing...')
+
+    def on_resize(self: Gui, event) -> None:
+        if event.widget != self.lamp_frame: return
+
+        w = self.lamp_frame.winfo_width()
+        if w == self.prev_width: return
+        self.prev_width = w
+
+        self.lamp1.resize_scales(round(w / 5 * 1.75))
+        self.lamp2.resize_scales(round(w / 5 * 1.75))
 
     def __init__(self: Gui, app: App) -> None:
         self.app = app
@@ -224,24 +257,35 @@ class Gui:
         self.root.title('Lamp Control Centre')
         self.root.rowconfigure(0, weight = 1)
         self.root.columnconfigure(0, weight = 1)
+        self.root.minsize(640, 480)
+        self.root.protocol('WM_DELETE_WINDOW', self.on_close)
 
-        frame = tb.Frame(self.root, padding = (20, 20, 20, 20))
-        frame.grid(row = 0, column = 0, sticky = 'nsew')
+        frame = tb.Frame(self.root, padding = (0, 0, 0, 0))
+        frame.grid(sticky = 'nsew')
+        frame.grid_columnconfigure(10, weight = 2, uniform = 'col')
+        frame.grid_columnconfigure(20, weight = 1, uniform = 'col')
+        frame.grid_rowconfigure(10)
+        frame.grid_rowconfigure(20, weight = 1)
         
-        cam_frame = tb.Frame(frame, width = 640, height = 360, border=2, bootstyle = SUCCESS) #type: ignore
-        cam_frame.grid(row = 10, column = 10, sticky = 'nw')
-        cam_frame.grid_propagate(False)
-
-        cam_frame.grid_columnconfigure(0, weight = 1)
-        cam_frame.grid_rowconfigure(0, weight = 1)
+        cam_frame = tb.Frame(frame, border = 2, bootstyle = SUCCESS) #type: ignore
+        cam_frame.grid(row = 10, column = 10)
+        self.cam_frame = cam_frame
 
         cam_label = tb.Label(cam_frame, text='No camera detected')
-        cam_label.grid(sticky = 'nsew')
-        cam_label.configure(anchor = 'center')
+        cam_label.grid(row = 10, column = 10)
         self.cam_label = cam_label
 
         lamp_frame = tb.Frame(frame)
-        lamp_frame.grid(row = 10, column = 20, sticky = 'nw')
+        lamp_frame.grid(row = 20, column = 10, sticky = 'new')
+        lamp_frame.bind('<Configure>', self.on_resize)
+        lamp_frame.grid_rowconfigure(0, weight = 1)
+        lamp_frame.grid_rowconfigure(1, weight = 1)
+        lamp_frame.grid_columnconfigure(0, weight = 1)
+        lamp_frame.grid_columnconfigure(1, weight = 1)
+        self.lamp_frame = lamp_frame
+
+        info_frame = tb.Frame(frame, bootstyle=SUCCESS)
+        info_frame.grid(row = 10, column = 20, rowspan = 200, sticky = 'nsew')
 
         input_picker = tb.Combobox(lamp_frame)
         input_picker['values'] = (TrackingType.BALL, TrackingType.FACE, TrackingType.NONE)
@@ -256,6 +300,7 @@ class Gui:
         self.lamp1 = LampControlWidget(
             lamp_frame,
             'Lamp 1',
+            300,
             lambda x: self.app.limited_move(x1 = x),
             lambda y: self.app.limited_move(y1 = y),
             lambda z: self.app.limited_move(z1 = z),
@@ -266,6 +311,7 @@ class Gui:
         self.lamp2 = LampControlWidget(
             lamp_frame,
             'Lamp 2',
+            300,
             lambda x: self.app.limited_move(x2 = x),
             lambda y: self.app.limited_move(y2 = y),
             lambda z: self.app.limited_move(z2 = z),
@@ -295,13 +341,23 @@ class Gui:
 
     def set_frame(self: Gui, frame: CameraFrame) -> None:
         self.frame = frame
-        self.root.event_generate('<<camera_frame>>')
+        with self.event_lock:
+            if self.closed: return
+            self.root.event_generate('<<camera_frame>>')
 
     def show_frame(self: Gui) -> None:
-        frame = cv2.resize(self.frame, (640, 360))
+        h, w = self.frame.shape[:2];
+        aspect_ratio = w / h
+
+        win_w = self.root.winfo_width();
+        win_h = self.root.winfo_height();
+        new_width = win_w / 3 * 2 - 10
+
+        frame = cv2.resize(self.frame, (round(new_width), round(new_width / w * h)))
         photo = cv2_frame_to_tk_image(frame)
         self.cam_label.photo = photo # type: ignore
-        self.cam_label.configure(image = photo, text = '')  
+        self.cam_label.configure(text = '', image = photo)  
+        # self.cam_frame.configure(width = w, height = h)
 
     def mainloop(self: Gui) -> None:
         self.root.mainloop()
