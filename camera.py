@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Optional, NamedTuple, Callable, Any
 from enum import Enum
 
+from glob import glob
 import time
 import random
 import platform
@@ -17,7 +18,7 @@ from multiprocessing.connection import Connection
 from multiprocessing.synchronize import Condition
 import ctypes
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageOps
 import ttkbootstrap as tb
 from ttkbootstrap.constants import SUCCESS, DISABLED, INFO
 
@@ -221,6 +222,9 @@ class Gui:
     cam_frame: tb.Frame
     cam_label: tb.Label
 
+    img_frame: tb.Frame
+    img_label: tb.Label
+
     # Sending a tkinter event after window close will block indefinitely, so we need to make sure
     # we don't do that
     event_lock: Lock = Lock()
@@ -231,7 +235,7 @@ class Gui:
     lamp1: LampControlWidget
     lamp2: LampControlWidget
 
-    prev_width: int = 0
+    prev_lamp_frame_width: int = 0
 
     app: App
 
@@ -241,12 +245,12 @@ class Gui:
             self.root.destroy()
         print('Closing...')
 
-    def on_resize(self: Gui, event) -> None:
+    def on_lamp_frame_resize(self: Gui, event) -> None:
         if event.widget != self.lamp_frame: return
 
         w = self.lamp_frame.winfo_width()
-        if w == self.prev_width: return
-        self.prev_width = w
+        if w == self.prev_lamp_frame_width: return
+        self.prev_lamp_frame_width = w
 
         self.lamp1.resize_scales(round(w / 5 * 1.75))
         self.lamp2.resize_scales(round(w / 5 * 1.75))
@@ -277,15 +281,27 @@ class Gui:
 
         lamp_frame = tb.Frame(frame)
         lamp_frame.grid(row = 20, column = 10, sticky = 'new')
-        lamp_frame.bind('<Configure>', self.on_resize)
+        lamp_frame.bind('<Configure>', self.on_lamp_frame_resize)
         lamp_frame.grid_rowconfigure(0, weight = 1)
         lamp_frame.grid_rowconfigure(1, weight = 1)
         lamp_frame.grid_columnconfigure(0, weight = 1)
         lamp_frame.grid_columnconfigure(1, weight = 1)
         self.lamp_frame = lamp_frame
 
-        info_frame = tb.Frame(frame, bootstyle=SUCCESS)
+        info_frame = tb.Frame(frame)
         info_frame.grid(row = 10, column = 20, rowspan = 200, sticky = 'nsew')
+        info_frame.grid_rowconfigure(10, weight = 1, uniform = 'guh')
+        info_frame.grid_rowconfigure(20, weight = 1, uniform = 'guh')
+        info_frame.grid_columnconfigure(10, weight = 1)
+
+        img_frame = tb.Frame(info_frame)
+        img_frame.grid(row = 10, column = 10, sticky = 'nsew')
+        img_frame.grid_rowconfigure(10, weight = 1)
+        img_frame.grid_columnconfigure(10, weight = 1)
+        self.img_frame = img_frame
+
+        self.img_label = tb.Label(img_frame, text = 'No slides found')
+        self.img_label.grid(row = 10, column = 10)
 
         input_picker = tb.Combobox(lamp_frame)
         input_picker['values'] = (TrackingType.BALL, TrackingType.FACE, TrackingType.NONE)
@@ -350,7 +366,6 @@ class Gui:
         aspect_ratio = w / h
 
         win_w = self.root.winfo_width();
-        win_h = self.root.winfo_height();
         new_width = win_w / 3 * 2 - 10
 
         frame = cv2.resize(self.frame, (round(new_width), round(new_width / w * h)))
@@ -383,6 +398,19 @@ class App:
 
     gui: Gui
 
+    images: list[Image]
+    image_index: int = 0
+
+    def next_image(self: App) -> None:
+        img = self.images[self.image_index].copy()
+        h, w = self.gui.img_frame.winfo_height(), self.gui.img_frame.winfo_width()
+        img = ImageOps.pad(img, (w - 5, h - 5))
+        self.image_index = (self.image_index + 1) % len(self.images)
+        img = ImageTk.PhotoImage(image = img)
+        self.gui.img_label.photo = img
+        self.gui.img_label.configure(text = '', image = img)
+        self.gui.root.after(2000, self.next_image)
+
     def __init__(
         self: App,
         width: int,
@@ -405,6 +433,17 @@ class App:
 
         self.ser = open_serial()
         self.gui = Gui(self)
+
+        paths = glob('slides/*')
+        self.images = []
+        for f in paths:
+            if not f.endswith('.jpg') and not f.endswith('.png'):
+                continue
+
+            img = Image.open(f)
+            self.images.append(img)
+        if len(self.images) > 0:
+            self.gui.root.after(100, self.next_image)
 
     def __enter__(self: App) -> App:
         return self
@@ -895,8 +934,8 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
     if platform.system() == 'Windows':
         cam = cv2.VideoCapture(2, cv2.CAP_DSHOW)
     else:
-        cam = cv2.VideoCapture(0)
-        # cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
+        # cam = cv2.VideoCapture(0)
+        cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
 
     if not cam.isOpened():
         error("Couldn't open camera")
@@ -910,5 +949,5 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
     return cam
 
 
-with App(1280, 720) as app:
+with App(1920, 1080) as app:
     app.run()
