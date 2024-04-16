@@ -15,12 +15,6 @@ Install dependencies:
 pip3 install -r requirements.txt
 ```
 
-To manually run application, execute following command:
-
-```bash
-run-lamp
-```
-
 # Info
 
 ## Servo Functions
