@@ -1,3 +1,5 @@
+<img class="img-fluid" src="https://github.com/tommyc2/LAMP-Bot-Project/assets/114081733/4ee7a6b1-cdb1-430e-ae1f-a18cac9e826c" alt="logo-lampbots" width=300 height=300>
+
 # Lamp Bot Project
 
 Project iteration on a servo controlled lamp using Python and OpenCV.
