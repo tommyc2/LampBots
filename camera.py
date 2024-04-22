@@ -237,6 +237,13 @@ class Gui:
 
     prev_lamp_frame_width: int = 0
 
+    logo_img: Image
+    logo_frame: tb.Frame
+    logo_label: tb.Label
+
+    prev_logo_width: int = 0
+    prev_logo_height: int = 0
+
     app: App
 
     def on_close(self: Gui) -> None:
@@ -244,6 +251,19 @@ class Gui:
             self.closed = True
             self.root.destroy()
         print('Closing...')
+
+    def on_window_resize(self: Gui, event) -> None:
+        if event.widget != self.logo_frame: return
+
+        h, w = self.logo_frame.winfo_height(), self.logo_frame.winfo_width()
+        if h < 20 or w < 20: return
+        if w == self.prev_logo_width and h == self.prev_logo_height: return
+        self.prev_logo_width = w
+        self.prev_logo_height = h
+        logo = ImageOps.pad(self.logo_img, (w - 20, h - 20))
+        logo = ImageTk.PhotoImage(image = logo)
+        self.logo_label.photo = logo
+        self.logo_label.configure(text = '', image = logo)
 
     def on_lamp_frame_resize(self: Gui, event) -> None:
         if event.widget != self.lamp_frame: return
@@ -263,6 +283,8 @@ class Gui:
         self.root.columnconfigure(0, weight = 1)
         self.root.minsize(640, 480)
         self.root.protocol('WM_DELETE_WINDOW', self.on_close)
+
+        self.logo_img = Image.open('images/LAMP-BOT-LOGO-FULL.png')
 
         frame = tb.Frame(self.root, padding = (0, 0, 0, 0))
         frame.grid(sticky = 'nsew')
@@ -302,6 +324,15 @@ class Gui:
 
         self.img_label = tb.Label(img_frame, text = 'No slides found')
         self.img_label.grid(row = 10, column = 10)
+
+        logo_frame = tb.Frame(info_frame)
+        logo_frame.grid(row = 20, column = 10, sticky = 'nsew')
+        logo_frame.bind('<Configure>', self.on_window_resize)
+        self.logo_frame = logo_frame
+
+        logo_label = tb.Label(logo_frame, text = 'No image')
+        logo_label.grid(row = 10, column = 10)
+        self.logo_label = logo_label
 
         input_picker = tb.Combobox(lamp_frame)
         input_picker['values'] = (TrackingType.BALL, TrackingType.FACE, TrackingType.NONE)
@@ -934,8 +965,8 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
     if platform.system() == 'Windows':
         cam = cv2.VideoCapture(2, cv2.CAP_DSHOW)
     else:
-        # cam = cv2.VideoCapture(0)
-        cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
+        cam = cv2.VideoCapture(0)
+        # cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
 
     if not cam.isOpened():
         error("Couldn't open camera")
@@ -949,5 +980,5 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
     return cam
 
 
-with App(1920, 1080) as app:
+with App(1280, 720) as app:
     app.run()
