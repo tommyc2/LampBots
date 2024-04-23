@@ -281,6 +281,7 @@ class Gui:
         self.root.title('Lamp Control Centre')
         self.root.rowconfigure(0, weight = 1)
         self.root.columnconfigure(0, weight = 1)
+        self.root.geometry('1280x720')
         self.root.minsize(640, 480)
         self.root.protocol('WM_DELETE_WINDOW', self.on_close)
 
