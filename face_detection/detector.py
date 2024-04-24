@@ -1,5 +1,6 @@
 import math
 import time
+import os
 
 import cv2
 import numpy as np
@@ -19,8 +20,9 @@ class Detector:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.device = device
-        self.model = Model(cfg = 'face_detection/yolov5n-0.5.yaml')
-        self.model.load_state_dict(torch.load('face_detection/yolov5n-0.5_state_dict.pt'))
+        this_dir = os.path.dirname(__file__)
+        self.model = Model(cfg = os.path.join(this_dir, 'yolov5n-0.5.yaml'))
+        self.model.load_state_dict(torch.load(os.path.join(this_dir, 'yolov5n-0.5_state_dict.pt')))
         self.model.float().fuse().eval()
 
         # Parameters

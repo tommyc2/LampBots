@@ -9,6 +9,7 @@ import time
 import random
 import sys
 import math
+import os
 
 import threading
 from threading import Lock
@@ -28,6 +29,12 @@ import cv2
 from serial import Serial
 import serial.tools.list_ports as list_ports
 from face_detection.detector import Detector
+
+this_dir = os.path.dirname(__file__)
+
+# Path relative to this file
+def relpath(path):
+    return os.path.join(this_dir, path)
 
 CameraFrame = np.ndarray
 
@@ -287,7 +294,7 @@ class Gui:
         self.root.minsize(640, 480)
         self.root.protocol('WM_DELETE_WINDOW', self.on_close)
 
-        self.logo_img = Image.open('images/new-logo.png')
+        self.logo_img = Image.open(relpath('images/new-logo.png'))
 
         frame = tb.Frame(self.root, padding = (0, 0, 0, 0))
         frame.grid(sticky = 'nsew')
@@ -490,7 +497,7 @@ class App:
         self.ser = open_serial()
         self.gui = Gui(self)
 
-        paths = glob('slides/*')
+        paths = glob(relpath('slides/*'))
         self.images = []
         for f in paths:
             if f.endswith('.jpg') or f.endswith('.png'):
