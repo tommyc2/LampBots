@@ -287,7 +287,7 @@ class Gui:
         self.root.minsize(640, 480)
         self.root.protocol('WM_DELETE_WINDOW', self.on_close)
 
-        self.logo_img = Image.open('images/new.png')
+        self.logo_img = Image.open('images/new-logo.png')
 
         frame = tb.Frame(self.root, padding = (0, 0, 0, 0))
         frame.grid(sticky = 'nsew')
