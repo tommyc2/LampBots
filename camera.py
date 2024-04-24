@@ -7,7 +7,6 @@ from enum import Enum
 from glob import glob
 import time
 import random
-import platform
 import sys
 import math
 
@@ -21,6 +20,7 @@ import ctypes
 from PIL import Image, ImageTk, ImageOps
 import ttkbootstrap as tb
 from ttkbootstrap.constants import SUCCESS, DISABLED, INFO
+from tkVideoPlayer import TkinterVideo
 
 import numpy as np
 import cv2
@@ -243,8 +243,10 @@ class Gui:
 
     prev_logo_width: int = 0
     prev_logo_height: int = 0
+    player: TkinterVideo
 
     app: App
+    loading: bool = False
 
     def on_close(self: Gui) -> None:
         with self.event_lock:
@@ -285,7 +287,7 @@ class Gui:
         self.root.minsize(640, 480)
         self.root.protocol('WM_DELETE_WINDOW', self.on_close)
 
-        self.logo_img = Image.open('images/LAMP-BOT-LOGO-FULL.png')
+        self.logo_img = Image.open('images/new.png')
 
         frame = tb.Frame(self.root, padding = (0, 0, 0, 0))
         frame.grid(sticky = 'nsew')
@@ -313,8 +315,8 @@ class Gui:
 
         info_frame = tb.Frame(frame)
         info_frame.grid(row = 10, column = 20, rowspan = 200, sticky = 'nsew')
-        info_frame.grid_rowconfigure(10, weight = 1, uniform = 'guh')
-        info_frame.grid_rowconfigure(20, weight = 1, uniform = 'guh')
+        info_frame.grid_rowconfigure(10, weight = 10, uniform = 'guh')
+        info_frame.grid_rowconfigure(20, weight = 15, uniform = 'guh')
         info_frame.grid_columnconfigure(10, weight = 1)
 
         img_frame = tb.Frame(info_frame)
@@ -322,6 +324,10 @@ class Gui:
         img_frame.grid_rowconfigure(10, weight = 1)
         img_frame.grid_columnconfigure(10, weight = 1)
         self.img_frame = img_frame
+
+        self.player = TkinterVideo(master = img_frame, scaled = True, consistant_frame_rate = True, keep_aspect = True)
+        # self.player.grid(row = 10, column = 10, sticky = 'nsew')
+        self.player.bind('<<Ended>>', lambda ev: app.next_image())
 
         self.img_label = tb.Label(img_frame, text = 'No slides found')
         self.img_label.grid(row = 10, column = 10)
@@ -434,14 +440,32 @@ class App:
     image_index: int = 0
 
     def next_image(self: App) -> None:
-        img = self.images[self.image_index].copy()
+        # For some reason, loading a video triggers a <<Ended>> event, so we need to guard
+        # against that
+        if self.gui.loading: return
+
+        item = self.images[self.image_index]
+        self.image_index = (self.image_index + 1) % len(self.images)
+
+        if isinstance(item, str):
+            self.gui.player.grid(row = 10, column = 10, sticky = 'nsew')
+            self.gui.img_label.grid_remove()
+            self.gui.loading = True
+            self.gui.player.load(item)
+            self.gui.loading = False
+            self.gui.player.play()
+            return
+
+        img = item.copy()
+
         h, w = self.gui.img_frame.winfo_height(), self.gui.img_frame.winfo_width()
         img = ImageOps.pad(img, (w - 5, h - 5))
-        self.image_index = (self.image_index + 1) % len(self.images)
         img = ImageTk.PhotoImage(image = img)
         self.gui.img_label.photo = img
         self.gui.img_label.configure(text = '', image = img)
-        self.gui.root.after(2000, self.next_image)
+        self.gui.player.grid_remove()
+        self.gui.img_label.grid(row = 10, column = 10, sticky = 'nsew')
+        self.gui.root.after(7500, self.next_image)
 
     def __init__(
         self: App,
@@ -469,11 +493,11 @@ class App:
         paths = glob('slides/*')
         self.images = []
         for f in paths:
-            if not f.endswith('.jpg') and not f.endswith('.png'):
-                continue
-
-            img = Image.open(f)
-            self.images.append(img)
+            if f.endswith('.jpg') or f.endswith('.png'):
+                img = Image.open(f)
+                self.images.append(img)
+            elif f.endswith('.webm') or f.endswith('.mp4'):
+                self.images.append(f)
         if len(self.images) > 0:
             self.gui.root.after(100, self.next_image)
 
@@ -963,11 +987,7 @@ def open_serial() -> Optional[Serial]:
     return serial_file
 
 def open_camera(width: int, height: int) -> cv2.VideoCapture:
-    if platform.system() == 'Windows':
-        cam = cv2.VideoCapture(2, cv2.CAP_DSHOW)
-    else:
-        cam = cv2.VideoCapture(0)
-        # cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
+    cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
 
     if not cam.isOpened():
         error("Couldn't open camera")
@@ -981,5 +1001,5 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
     return cam
 
 
-with App(1280, 720) as app:
+with App(1920, 1080) as app:
     app.run()

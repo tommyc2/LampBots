@@ -3,6 +3,7 @@ opencv-python
 pyserial
 pillow
 ttkbootstrap
+tkvideoplayer
 torch
 torchvision
 pyyaml
