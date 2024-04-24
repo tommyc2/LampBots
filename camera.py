@@ -252,6 +252,8 @@ class Gui:
     prev_logo_height: int = 0
     player: TkinterVideo
 
+    applied_robotics_label: tb.Label
+
     app: App
     loading: bool = False
 
@@ -293,8 +295,10 @@ class Gui:
         self.root.geometry('1280x720')
         self.root.minsize(640, 480)
         self.root.protocol('WM_DELETE_WINDOW', self.on_close)
+        self.root.attributes('-fullscreen', True)
+        self.root.bind('<Escape>', lambda ev: self.root.attributes('-fullscreen', False))
 
-        self.logo_img = Image.open(relpath('images/new-logo.png'))
+        self.logo_img = Image.open(relpath('images/real-new-logo.png'))
 
         frame = tb.Frame(self.root, padding = (0, 0, 0, 0))
         frame.grid(sticky = 'nsew')
