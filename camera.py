@@ -998,7 +998,8 @@ def open_serial() -> Optional[Serial]:
     return serial_file
 
 def open_camera(width: int, height: int) -> cv2.VideoCapture:
-    cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
+    # cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
+    cam = cv2.VideoCapture(0)
 
     if not cam.isOpened():
         error("Couldn't open camera")
