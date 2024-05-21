@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+
+# There are numerous TODO comments in this file pointing out areas where improvements could be made.
+# God help you.
+
+# TODO
+# Replace TKinter with a different GUI library. TKinter is the *devil*. I think the only time you
+# should ever consider using TKinter is if you just need to throw some buttons and text boxes on
+# screen. If you want to do anything more complex, or (god forbid) make a nice looking application,
+# you will experience true pain trying to use TKinter. As a result the UI here is not very robust.
+# It works well enough and will resize properly but I don't feel good about it.
+#
+# I suggest checking out QT6. I don't know if it's any good, but a lot of mainstream programs use QT
+# so it can't be that bad.
+
 # Required for forward references
 from __future__ import annotations
 from typing import Optional, NamedTuple, Callable, Any
@@ -572,6 +586,10 @@ class App:
 
         self.send_data(new_v1, new_v2)
 
+    # TODO
+    # This function always sends 8 servo values to the sender, which always sends 8 values over
+    # radio. This should be changed to only send the servo values that actually change. The receiver
+    # is already set up for this, it only needs to be implemented here and on the sender.
     def send_data(self: App, v1: ServoValues, v2: ServoValues) -> None:
         if self.ser is not None:
             try:
@@ -641,6 +659,11 @@ class App:
                 self.last_send_time = time.time_ns()
                 self.send_data(v1, v2)
     
+    # TODO
+    # There is sometimes a deadlock when exiting the program. This is almost certainly due to a
+    # race condition which causes one of the threads to never exit when signaled. I didn't have
+    # time to debug this, and it doesn't really matter since the program won't be exiting in normal
+    # operation. But it's still a bug!
     def run(self: App) -> None:
         self.tracker.start()
 
@@ -830,6 +853,10 @@ class Tracker(mp.Process):
 
         return r1, r2
 
+    # TODO
+    # This function was optimised specifically to track a large green balloon in the auditorium.
+    # It would be a good idea to add sliders for HSV tolerances to the UI so it could be adjusted
+    # to work in other lighting conditions and for other colours.
     def track_ball(self: Tracker, frame: CameraFrame) -> tuple[Optional[Rect], Optional[Rect]]:
         """
         Find round objects matching `self.hue` in `frame`.
@@ -889,7 +916,16 @@ def new_idle_value(previous_value: Optional[ServoValues]) -> ServoValues:
         ret = random.choice(values)
     return ret
 
+# TODO
+# These two functions are very SUS. They don't account for the fact that the camera lens is not square.
+# Given that, they seem to work pretty well. I think. We didn't have working hardware for the last 5
+# weeks of the semester so I can't tell you for sure. It worked great when we presented it to the
+# primary/secondary school kids though.
+
+# Given the width of a face in pixels, returns the distance from the camera in centimeters
+# Uses the average width of a human face
 def get_distance(face_width) -> float:
+    # 450 was chosen by trial and error
     return 14.5 * 450 / face_width
 
 def get_pixel_dist(face_width: float) -> float:
@@ -899,6 +935,13 @@ def get_pixel_dist(face_width: float) -> float:
 def draw_rect(frame: CameraFrame, rect: Rect, color: tuple[int, int, int] = (0, 255, 0)) -> None:
     (x1, y1), (x2, y2) = rect
     cv2.rectangle(frame, (round(x1), round(y1)), (round(x2), round(y2)), color, 2)
+
+# TODO
+# This function was calibrated for a camera resolution of 640x480. It *should* work properly for
+# other resolutions so long as they maintain the same aspect ratio of 4:3. Near the end of the
+# project we started using the full camera resolution of 1920x1080. As such this function needs
+# to be recalibrated for a 16:9 aspect ratio. Note that we don't pass a 1920x1080 frame to this
+# function, instead we downscale it to 640x360 first.
 
 # Returns the servo values to send to a lamp for tracking a rectangle
 def servo_values_from_rect(frame: CameraFrame, rect: Rect, x_off: float) -> ServoValues:
@@ -929,9 +972,6 @@ def servo_values_from_rect(frame: CameraFrame, rect: Rect, x_off: float) -> Serv
         if offset < 0:
             angle = 180 - angle
 
-    # diff = angle - 90
-    # x = 90 + diff / 4 * 3
-    # w = 90 - diff / 4
     x = angle
 
     # Subtract 120 from distance, with minimum of zero for calculations
@@ -997,6 +1037,12 @@ def open_serial() -> Optional[Serial]:
 
     return serial_file
 
+# TODO
+# Currently this just opens the camera device at index 0. This will *probably* work for every
+# camera, but it's not guaranteed. If you have a specific camera you should get its id in /dev/
+# v4l/ by-id and use that instead, it's the robust way to find a specific camera. If you don't know
+# exactly what camera you're going to use or if you want to be able to use multiple cameras you
+# should add a dropdown that lets the user pick a camera.
 def open_camera(width: int, height: int) -> cv2.VideoCapture:
     # cam = cv2.VideoCapture('/dev/v4l/by-id/usb-WCM_USB_WEB_CAM-video-index0')
     cam = cv2.VideoCapture(0)
