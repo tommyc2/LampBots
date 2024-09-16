@@ -7,6 +7,8 @@ Project iteration on a servo controlled lamp using Python and OpenCV.
 # Note:
 To minimise/avoid any issues, please run this in a **Linux Environment** either using a VM or dual-boot etc. Popular examples include Ubuntu, Linux Mint etc.
 
+** NB: You should NEVER publish any API key to a public repo. When you generate your OpenAI (ChatGPT) key, put the key in a file (e.g. .env file) assigned to a variable. That way, you don't have to manually remove your API key from your Python script before pushing to GitHub.
+
 # Usage
 
 Requires at least Python 3.10.
