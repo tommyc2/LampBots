@@ -2,6 +2,9 @@
 
 # Lamp Bot Project
 
+### Important Note: It is recommended to clone instead of fork this repo. This will allow SETU robotics/IoT/electronic students to enhance the model every year :)
+
+
 Project iteration on a servo controlled lamp using Python and OpenCV.
 
 # Note:
@@ -38,3 +41,5 @@ pip3 install -r requirements.txt
 ## Explanation of Servo Operation
 - Servos work by receiving PWM signals, adjusting the position of the motor shaft.
 - They are DC actuators, converting electrical energy into mechanical movement.
+
+If in doubt with any of the above, feel free to reach out directly to Tommy, Igor, Evan or Jeff :)
